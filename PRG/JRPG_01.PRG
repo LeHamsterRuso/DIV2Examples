@@ -346,20 +346,16 @@ BEGIN
         screen_x = x + offset_x;
         screen_y = y + offset_y;
 
+        // Cleanup
+        IF (draw_id != 0)
+            delete_draw(draw_id);
+            draw_id = 0;
+        END
         // Draw NPC circle only if visible on screen
         IF (screen_x + 10 > 0 AND screen_x - 10 < ScreenConfig.width AND screen_y + 10 > 0 AND screen_y - 10 < ScreenConfig.height)
-            IF (draw_id != 0)
-                delete_draw(draw_id);
-            END
             color = NPCData[id_char].color;
             draw_z = ZLevels.npc;
             draw_id = draw(5, color, 15, 0, screen_x - 10, screen_y - 10, screen_x + 10, screen_y + 10);
-        ELSE
-            // If not visible, delete if exists
-            IF (draw_id != 0)
-                delete_draw(draw_id);
-                draw_id = 0;
-            END
         END
 
         FRAME;
