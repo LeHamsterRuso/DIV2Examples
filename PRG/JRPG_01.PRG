@@ -226,6 +226,7 @@ PRIVATE
     new_x, new_y;
     closest_npc = -1;
     temp_dist;
+    min_dist;
     i;
 BEGIN
     x = player_x;
@@ -297,11 +298,12 @@ BEGIN
 
         // Calculate distances for interaction
         closest_npc = -1;
+        min_dist = 51; // greater than 50
         FROM i = 0 TO MAX_NPC - 1:
             temp_dist = sqrt((player_x - NPCData[i].x) * (player_x - NPCData[i].x) + (player_y - NPCData[i].y) * (player_y - NPCData[i].y));
-            IF (temp_dist < 50)
+            IF (temp_dist < 50 AND temp_dist < min_dist)
                 closest_npc = i;
-                i = MAX_NPC; // exit loop
+                min_dist = temp_dist;
             END
         END
 
@@ -310,7 +312,7 @@ BEGIN
             IF (DialogState.press_timer == 0)
                 DialogState.press_timer = ScreenConfig.fps / 3;
                 IF (DialogState.process_id == 0)
-                    DialogState.process_id = dialogo(NPCData[closest_npc].name, NPCData[closest_npc].dialogue);
+                    DialogState.process_id = dialogue(NPCData[closest_npc].name, NPCData[closest_npc].dialogue);
                 ELSE
                     IF (DialogState.open_timer == 0)
                         IF (DialogState.complete == 1)
@@ -371,7 +373,7 @@ END
 // Displays the speaker's name and animates text letter-by-letter.
 // Handles user input to skip or close, draws the dialogue box,
 // name, and text, and controls timers for opening and closing.
-PROCESS dialogo(STRING name, STRING text)
+PROCESS dialogue(STRING name, STRING text)
 PRIVATE
     STRING temp; // temporary string to build the text
     index = 0;
