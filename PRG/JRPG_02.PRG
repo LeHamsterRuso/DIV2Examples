@@ -1,13 +1,21 @@
 //------------------------------------------------------------------------------
-// TITLE:       JRPG with graphic primitives
+// TITLE:       JRPG with graphic primitives - Optimized edition with features
 // AUTHOR:      Sebastian J. MONCHO MAQUET
 // DATE:        04/01/2026
-// DESCRIPTION: Enhanced JRPG featuring multiple tile-based maps (world and detailed cities),
-//              background music, inventory system with items,
-//              interactive dialogues with yes/no choices and item rewards,
-//              optimized map rendering using dirty rectangles,
-//              proper Z-leveling for drawing order,
-//              and smooth map transitions with fade effects.
+// DESCRIPTION: Enhanced JRPG with significant rendering optimizations over JRPG_01.
+//              
+//              KEY IMPROVEMENTS:
+//              - Dirty rectangle rendering: Map only redraws when camera/map changes
+//              - Consolidated rendering: All drawing in single map_drawer process
+//              - Eliminated redundant processes: NPC drawing integrated into renderer
+//              - Multiple tile-based maps: World (32x24) + 2 cities (8x8 each)
+//              - Background music system with looping support
+//              - Full inventory system with item management
+//              - Interactive dialogues with yes/no choices and item rewards
+//              - Proper Z-level layering: map < NPCs < player < inventory < dialogs
+//              - Smooth map transitions with fade effects between zones
+//              - Terrain-based movement: speed varies on forest/mountain tiles
+//              - Collision detection: water tiles are impassable
 //------------------------------------------------------------------------------
 
 PROGRAM JRPG;
@@ -23,9 +31,9 @@ GLOBAL
     draw_counter = 0;
     current_map = 0; // 0 = world, 1 = city1, 2 = city2
     song_id = 0;
-    last_offset_x = -1; // For dirty rectangle optimization
-    last_offset_y = -1;
-    last_map = -1;
+    prev_offset_x = -1;
+    prev_offset_y = -1;
+    prev_map = 0;
     STRUCT Inventory[10]
         STRING item;
     END
@@ -76,10 +84,11 @@ GLOBAL
         INT forest = 34;    // Dark green forest
     END
     STRUCT ZLevels
-        INT map = 100;      // Map at the back
-        INT npc = 0;        // NPCs over map
-        INT player = -10;   // Player over map
-        INT dialog = -200;  // Dialogue over everything
+        INT map = 100;           // Map at the back
+        INT npc = 0;             // NPCs over map
+        INT player = -10;        // Player over map
+        INT inventory_bg = -150; // Inventory background
+        INT dialog = -200;       // Dialogue over everything
     END
     STRUCT ScreenConfig
         INT width = 320;
@@ -105,17 +114,16 @@ BEGIN
 
     // Create processes
     map_drawer();
-    npc(0);
-    npc(1);
-    npc(2);
-    npc(3);
-    npc(4);
-    npc(5);
     player();
+    LOOP
+        FRAME;
+    END
 END
 
-// Initializes the NPC data array.
-// Sets predefined names, dialogues, positions, and colors for each NPC.
+// Initializes the NPC data array with predefined values.
+// Sets names, dialogues, positions, colors, and item rewards for all NPCs.
+// NPCs 0-1: World map, NPCs 2-3: City 1, NPCs 4-5: City 2.
+// This centralized data structure eliminates the need for individual NPC processes.
 PROCESS InitNPCData()
 PRIVATE
     i;
@@ -164,11 +172,15 @@ BEGIN
     NPCData[5].gives_item = 0;
 END
 
-// Generates the tile-based map.
-// Assigns color values to each tile in the Map.tiles array,
-// creating terrains like fields, mountains, rivers, bridges, forests, and cities
-// based on position conditions.
-// World map: 32x24 tiles (1024x768 pixels), cities: 8x8 tiles (256x256 pixels)
+// Generates all tile-based maps (world + cities).
+// Assigns color values to each tile creating varied terrains:
+// - Fields (green): Normal movement speed
+// - Mountains (brown): Slow movement, found on edges
+// - Rivers (blue): Impassable water obstacles
+// - Bridges (dark brown): Walkable paths over water
+// - Forests (dark green): Slow movement areas
+// - Cities (yellow): Entry points to detailed city maps
+// Map sizes: World 32x24 tiles (1024x768px), Cities 8x8 tiles (256x256px)
 PROCESS InitMap()
 PRIVATE
     i, j;
@@ -269,8 +281,9 @@ BEGIN
     END
 END
 
-// Assigns key constants to the Controls struct.
-// Sets values for player input: left, right, up, down, talk, inventory, and exit.
+// Initializes the Controls struct with keyboard bindings.
+// Maps arrow keys for movement, ENTER for NPC interaction,
+// ESC for inventory screen, and F10 for game exit.
 PROCESS InitControls()
 BEGIN
     Controls.left = _LEFT;
@@ -282,9 +295,17 @@ BEGIN
     Controls.exit = _F10;
 END
 
-// Continuously renders the visible portion of the map.
-// Calculates the range of tiles on screen, draws filled rectangles
-// for each tile with the appropriate color, and manages draw IDs for cleanup.
+// Central rendering process - MAIN IMPROVEMENT OVER JRPG_01.
+// Uses dirty rectangle optimization: only redraws map when camera offset or
+// current_map changes, drastically reducing draw calls per frame.
+// 
+// Renders in order:
+// 1. Map tiles (only if dirty) - calculates visible tile range
+// 2. NPCs (every frame) - checks visibility and current map
+// 3. Player (every frame) - always centered on screen
+// 
+// All drawing consolidated here eliminates separate NPC processes,
+// improving performance and simplifying draw ID management.
 PROCESS map_drawer()
 PRIVATE
     i, j, color, x1, y1, x2, y2;
@@ -292,57 +313,98 @@ PRIVATE
     map_width, map_height;
 BEGIN
     LOOP
-        // Dirty rectangle optimization: only redraw if map or camera changed
-        IF (current_map != last_map OR offset_x != last_offset_x OR offset_y != last_offset_y)
-            last_map = current_map;
-            last_offset_x = offset_x;
-            last_offset_y = offset_y;
+        IF (inventory_open == 0)
+            // Check if we need to redraw map (dirty rectangle approach)
+            IF (offset_x != prev_offset_x OR offset_y != prev_offset_y OR current_map != prev_map)
+                // Delete previous map draws
+                FOR (i = 0; i < draw_counter; i++)
+                    delete_draw(draw_ids[i]);
+                END
+                draw_counter = 0;
 
-            // Delete previous draws
-            FOR (i = 0; i < draw_counter; i++)
-                delete_draw(draw_ids[i]);
+                // Set map dimensions based on current_map
+                map_width = MapData[current_map].tilesX;
+                map_height = MapData[current_map].tilesY;
+
+                // Calculate visible tile range
+                IF (((-offset_x + 31) / 32) - 1 > 0) i_min = ((-offset_x + 31) / 32) - 1; ELSE i_min = 0; END
+                IF (map_width - 1 < ((ScreenConfig.width - offset_x) / 32) + 1) i_max = map_width - 1; ELSE i_max = ((ScreenConfig.width - offset_x) / 32) + 1; END
+                IF (((-offset_y + 31) / 32) - 1 > 0) j_min = ((-offset_y + 31) / 32) - 1; ELSE j_min = 0; END
+                IF (map_height - 1 < ((ScreenConfig.height - offset_y) / 32) + 1) j_max = map_height - 1; ELSE j_max = ((ScreenConfig.height - offset_y) / 32) + 1; END
+
+                i = i_min;
+                WHILE (i <= i_max)
+                    j = j_min;
+                    WHILE (j <= j_max)
+                        x1 = i * 32 + offset_x;
+                        y1 = j * 32 + offset_y;
+                        x2 = x1 + 32;
+                        y2 = y1 + 32;
+                        // Get color based on current_map
+                        color = MapData[current_map].tiles[i,j];
+                        // Set Z for map
+                        draw_z = ZLevels.map;
+                        // Draw filled rectangle
+                        draw_ids[draw_counter] = draw(3, color, 15, 0, x1, y1, x2, y2);
+                        draw_counter++;
+                        j++;
+                    END
+                    i++;
+                END
+                
+                // Update previous values
+                prev_offset_x = offset_x;
+                prev_offset_y = offset_y;
+                prev_map = current_map;
             END
-            draw_counter = 0;
-
-            // Set map dimensions based on current_map
-            map_width = MapData[current_map].tilesX;
-            map_height = MapData[current_map].tilesY;
-
-        // Set Z for map
-        draw_z = ZLevels.map;
-
-        // Calculate visible tile range
-        IF (((-offset_x + 31) / 32) - 1 > 0) i_min = ((-offset_x + 31) / 32) - 1; ELSE i_min = 0; END
-        IF (map_width - 1 < ((ScreenConfig.width - offset_x) / 32) + 1) i_max = map_width - 1; ELSE i_max = ((ScreenConfig.width - offset_x) / 32) + 1; END
-        IF (((-offset_y + 31) / 32) - 1 > 0) j_min = ((-offset_y + 31) / 32) - 1; ELSE j_min = 0; END
-        IF (map_height - 1 < ((ScreenConfig.height - offset_y) / 32) + 1) j_max = map_height - 1; ELSE j_max = ((ScreenConfig.height - offset_y) / 32) + 1; END
-        i = i_min;
-        WHILE (i <= i_max)
-            j = j_min;
-            WHILE (j <= j_max)
-                x1 = i * 32 + offset_x;
-                y1 = j * 32 + offset_y;
-                x2 = x1 + 32;
-                y2 = y1 + 32;
-                // Get color based on current_map
-                color = MapData[current_map].tiles[i,j];
-                // Draw filled rectangle
-                draw_ids[draw_counter] = draw(3, color, 15, 0, x1, y1, x2, y2);
-                draw_counter++;
-                j++;
+            
+            // Draw NPCs
+            draw_z = ZLevels.npc;
+            i = 0;
+            WHILE (i < MAX_NPC)
+                // Check if NPC is in current map
+                j = 0;
+                IF (i >= 2 AND i < 4)
+                    j = 1;
+                ELSE
+                    IF (i >= 4)
+                        j = 2;
+                    END
+                END
+                IF (current_map == j)
+                    // Calculate screen position
+                    x1 = NPCData[i].x + offset_x;
+                    y1 = NPCData[i].y + offset_y;
+                    // Check if visible on screen
+                    IF (x1 + 10 > 0 AND x1 - 10 < ScreenConfig.width AND y1 + 10 > 0 AND y1 - 10 < ScreenConfig.height)
+                        draw_ids[draw_counter] = draw(5, NPCData[i].color, 15, 0, x1 - 10, y1 - 10, x1 + 10, y1 + 10);
+                        draw_counter++;
+                    END
+                END
+                i++;
             END
-            i++;
+            
+            // Draw player
+            draw_z = ZLevels.player;
+            draw_ids[draw_counter] = draw(5, 15, 15, 0, ScreenConfig.width / 2 - 10, ScreenConfig.height / 2 - 10, ScreenConfig.width / 2 + 10, ScreenConfig.height / 2 + 10);
+            draw_counter++;
         END
-
-        END // End of dirty check IF
 
         FRAME;
     END
 END
 
-// Handles player movement, camera centering, interaction with NPCs,
-// dialogue management, and rendering the player as a circle.
-// Includes terrain-based speed adjustments and collision detection for water.
+// Handles all player logic and interactions.
+// 
+// RESPONSIBILITIES:
+// - Movement input processing with terrain-based speed modulation
+// - Collision detection: prevents movement into water tiles
+// - Camera offset calculation to keep player centered
+// - NPC proximity detection and interaction triggering
+// - Map transition detection when stepping on city tiles
+// - Inventory and dialogue system integration
+// 
+// Note: Player rendering moved to map_drawer for optimized draw order.
 PROCESS player()
 PRIVATE
     draw_id = 0;
@@ -351,6 +413,7 @@ PRIVATE
     new_x, new_y;
     closest_npc = -1;
     temp_dist;
+    min_dist;
     i;
     npc_map;
     exit_direction;
@@ -358,6 +421,12 @@ BEGIN
     x = player_x;
     y = player_y;
     LOOP
+        // Delete previous player draw
+        IF (draw_id != 0)
+            delete_draw(draw_id);
+            draw_id = 0;
+        END
+
         // Calculate current tile and speed
         tile_i = player_x / 32;
         tile_j = player_y / 32;
@@ -494,13 +563,6 @@ BEGIN
         screen_x = ScreenConfig.width / 2;
         screen_y = ScreenConfig.height / 2;
 
-        // Draw player circle
-        IF (draw_id != 0)
-            delete_draw(draw_id);
-        END
-        draw_z = ZLevels.player;
-        draw_id = draw(5, 15, 15, 0, screen_x - 10, screen_y - 10, screen_x + 10, screen_y + 10);
-
         IF (KEY(Controls.inventory))
             IF (DialogState.press_timer == 0)
                 DialogState.press_timer = ScreenConfig.fps / 3;
@@ -518,6 +580,7 @@ BEGIN
 
         // Calculate distances for interaction
         closest_npc = -1;
+        min_dist = 51; // greater than 50
         FROM i = 0 TO MAX_NPC - 1:
             // Check if NPC is in current map
             npc_map = 0;
@@ -530,9 +593,9 @@ BEGIN
             END
             IF (current_map == npc_map)
                 temp_dist = sqrt((player_x - NPCData[i].x) * (player_x - NPCData[i].x) + (player_y - NPCData[i].y) * (player_y - NPCData[i].y));
-                IF (temp_dist < 50)
+                IF (temp_dist < 50 AND temp_dist < min_dist)
                     closest_npc = i;
-                    i = MAX_NPC; // exit loop
+                    min_dist = temp_dist;
                 END
             END
         END
@@ -592,10 +655,18 @@ BEGIN
     END
 END
 
-// Manages the dialogue system.
-// Displays the speaker's name and animates text letter-by-letter.
-// Handles user input to skip or close, draws the dialogue box,
-// name, and text, and controls timers for opening and closing.
+// Manages the interactive dialogue system with optional yes/no choices.
+// 
+// FEATURES:
+// - Letter-by-letter text animation with configurable speed
+// - Skippable text animation (press ENTER to complete instantly)
+// - Optional yes/no selection menu for item rewards
+// - Visual feedback with selection cursor
+// - Automatic closing for simple dialogues
+// - Manual closing for choice dialogues after selection
+// - Proper z-leveling to appear above all other elements
+// 
+// Creates dialogue box, name display, and manages all UI cleanup.
 PROCESS dialogue(STRING name, STRING text, INT has_options, STRING item_name[10])
 PRIVATE
     STRING temp; // temporary string to build the text
@@ -801,59 +872,18 @@ BEGIN
     END
 END
 
-// Renders the specified NPC as a circle on screen if visible.
-// Calculates screen position and manages draw IDs.
-PROCESS npc(id_char)
-PRIVATE
-    draw_id = 0;
-    screen_x, screen_y;
-    color = 0;
-    npc_map;
-BEGIN
-    x = NPCData[id_char].x;
-    y = NPCData[id_char].y;
-    LOOP
-        // Check if NPC is in current map
-        npc_map = 0;
-        IF (id_char >= 2 AND id_char < 4)
-            npc_map = 1;
-        ELSE
-            IF (id_char >= 4)
-                npc_map = 2;
-            END
-        END
-        IF (current_map == npc_map)
-            // Calculate screen position
-            screen_x = x + offset_x;
-            screen_y = y + offset_y;
-
-            // Draw NPC circle only if visible on screen
-            IF (screen_x + 10 > 0 AND screen_x - 10 < ScreenConfig.width AND screen_y + 10 > 0 AND screen_y - 10 < ScreenConfig.height)
-                IF (draw_id != 0)
-                    delete_draw(draw_id);
-                END
-                color = NPCData[id_char].color;
-                draw_z = ZLevels.npc;
-                draw_id = draw(5, color, 15, 0, screen_x - 10, screen_y - 10, screen_x + 10, screen_y + 10);
-            ELSE
-                // If not visible, delete if exists
-                IF (draw_id != 0)
-                    delete_draw(draw_id);
-                    draw_id = 0;
-                END
-            END
-        ELSE
-            // If not in map, delete if exists
-            IF (draw_id != 0)
-                delete_draw(draw_id);
-                draw_id = 0;
-            END
-        END
-
-        FRAME;
-    END
-END
-
+// Displays the inventory screen with full item management.
+// 
+// FEATURES:
+// - Blue fullscreen background at dedicated z-level
+// - Scrollable item list (shows up to 8 items)
+// - Arrow key navigation with visual cursor
+// - Item selection (use functionality placeholder)
+// - Back option to return to game
+// - Exit game option
+// 
+// Sets inventory_open flag to pause rendering in map_drawer,
+// preventing map/NPC/player draws while inventory is active.
 PROCESS inventory_screen()
 PRIVATE
     bg_id, title_id;
@@ -882,7 +912,7 @@ BEGIN
     END
 
     // Draw blue background
-    draw_z = ZLevels.dialog;
+    draw_z = ZLevels.inventory_bg;
     bg_id = draw(3, 244, 15, 0, 0, 0, ScreenConfig.width, ScreenConfig.height); // Blue rectangle
 
     // Title
