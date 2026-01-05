@@ -13,11 +13,6 @@ GLOBAL
     offset_y = 0;
     player_x = 160;
     player_y = 120;
-    player_id = 0;
-    npc1_id = 0;
-    npc2_id = 0;
-    draw_ids[256]; // array for draw IDs (maximum safe)
-    draw_counter = 0;
     STRUCT Controls
         INT left;
         INT right;
@@ -80,9 +75,9 @@ BEGIN
 
     // Create processes
     map_drawer();
-    npc1_id = npc(0);
-    npc2_id = npc(1);
-    player_id = player();
+    npc(0);
+    npc(1);
+    player();
 END
 
 // Initializes the NPC data array.
@@ -179,6 +174,8 @@ PROCESS map_drawer()
 PRIVATE
     i, j, color, x1, y1, x2, y2;
     i_min, i_max, j_min, j_max;
+    draw_ids[256]; // array for draw IDs (maximum safe)
+    draw_counter = 0;
 BEGIN
     LOOP
         // Delete previous draws
