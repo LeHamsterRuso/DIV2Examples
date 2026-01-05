@@ -27,8 +27,6 @@ GLOBAL
     offset_y = 0;
     player_x = 160;
     player_y = 120;
-    draw_ids[256]; // array for draw IDs (maximum safe)
-    draw_counter = 0;
     current_map = 0; // 0 = world, 1 = city1, 2 = city2
     song_id = 0;
     prev_offset_x = -1;
@@ -311,6 +309,8 @@ PRIVATE
     i, j, color, x1, y1, x2, y2;
     i_min, i_max, j_min, j_max;
     map_width, map_height;
+    draw_ids[256]; // array for draw IDs (maximum safe)
+    draw_counter = 0;
 BEGIN
     LOOP
         IF (inventory_open == 0)
@@ -1001,3 +1001,4 @@ BEGIN
     END
     inventory_open = 0;
 END
+
