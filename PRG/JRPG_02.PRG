@@ -421,7 +421,6 @@ END
 // Note: Player rendering moved to map_drawer for optimized draw order.
 PROCESS player()
 PRIVATE
-    draw_id = 0;
     screen_x, screen_y;
     tile_i, tile_j, speed;
     new_x, new_y;
@@ -437,12 +436,6 @@ BEGIN
     x = player_x;
     y = player_y;
     LOOP
-        // Delete previous player draw
-        IF (draw_id != 0)
-            delete_draw(draw_id);
-            draw_id = 0;
-        END
-
         // Calculate current tile and speed
         tile_i = player_x / 32;
         tile_j = player_y / 32;
