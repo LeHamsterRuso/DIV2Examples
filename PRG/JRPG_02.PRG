@@ -747,7 +747,7 @@ BEGIN
         END
 
         // Animate text letter by letter
-        IF (DialogState.skip)
+        IF (DialogState.skip AND index < len)
             index = len;
             DialogState.skip = 0;
             // Build temp with the full text
@@ -759,8 +759,9 @@ BEGIN
             temp[index] = 0;
             complete = 1;
             DialogState.complete = 1;
+            letter_delay = 0; // Reset delay
         END
-        IF (index < len)
+        IF (index < len AND DialogState.skip == 0)
             IF (letter_delay == 0)
                 index++;
                 // Build temp with the first index letters
@@ -775,8 +776,17 @@ BEGIN
                 letter_delay--;
             END
         ELSE
-            complete = 1;
-            DialogState.complete = 1;
+            IF (complete == 0)
+                complete = 1;
+                DialogState.complete = 1;
+                // Ensure full text is in temp
+                i = 0;
+                WHILE (i < len)
+                    temp[i] = text[i];
+                    i++;
+                END
+                temp[len] = 0;
+            END
         END
 
         // Write current text
@@ -790,11 +800,8 @@ BEGIN
             IF (showing_options == 0)
                 showing_options = 1;
             END
-        ELSE
-            IF (complete == 1 AND DialogState.has_options == 0)
-                DialogState.closing = 1; // Auto close for non-option dialogues
-            END
         END
+        // Note: For non-option dialogues, wait for user to press ENTER to close
 
         // Handle options menu if showing
         IF (showing_options)
