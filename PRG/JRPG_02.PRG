@@ -38,6 +38,7 @@ GLOBAL
     INT item_count = 0;
     INT inventory_open = 0; // Legacy flag (no longer used for logic)
     INT inventory_active = 0; // True while inventory_screen process is running
+    INT force_redraw = 0; // Force map redraw
     STRUCT Controls
         INT left;
         INT right;
@@ -316,7 +317,6 @@ PRIVATE
     npc_draw_count = 0;
     player_draw_id = 0; // single ID for player
     dirty;
-    force_redraw;
     last_inventory_state;
 BEGIN
     force_redraw = 1;
@@ -1060,6 +1060,7 @@ BEGIN
         
         // Check if we should exit
         IF (exit_inventory)
+            force_redraw = 1; // Force map redraw when exiting inventory
             BREAK;
         END
 
