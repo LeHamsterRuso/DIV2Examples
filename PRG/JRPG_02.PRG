@@ -36,7 +36,8 @@ GLOBAL
         STRING item;
     END
     INT item_count = 0;
-    INT inventory_open = 0;
+    INT inventory_open = 0; // Legacy flag (no longer used for logic)
+    INT inventory_active = 0; // True while inventory_screen process is running
     STRUCT Controls
         INT left;
         INT right;
@@ -149,7 +150,7 @@ BEGIN
     NPCData[2].color = 9; // Dark blue
     NPCData[2].gives_item = 0;
     NPCData[3].name = "City1 Merchant";
-    NPCData[3].dialogue = "Buy something? We have goods!";
+    NPCData[3].dialogue = "The lost to the river";
     NPCData[3].x = 160; // 5*32
     NPCData[3].y = 128; // 4*32
     NPCData[3].color = 10; // Light green
@@ -157,13 +158,13 @@ BEGIN
 
     // City 2 NPCs
     NPCData[4].name = "City2 Elder";
-    NPCData[4].dialogue = "The old city holds many secrets.";
+    NPCData[4].dialogue = "Chiadow, buy yourself an Evercade.";
     NPCData[4].x = 96; // 3*32
     NPCData[4].y = 64; // 2*32
     NPCData[4].color = 13; // Magenta
     NPCData[4].gives_item = 0;
     NPCData[5].name = "City2 Child";
-    NPCData[5].dialogue = "This city is fun to explore!";
+    NPCData[5].dialogue = "Eboke resigns!";
     NPCData[5].x = 192; // 6*32
     NPCData[5].y = 160; // 5*32
     NPCData[5].color = 11; // Cyan
@@ -314,22 +315,50 @@ PRIVATE
     npc_draw_ids[MAX_NPC]; // separate array for NPC draw IDs
     npc_draw_count = 0;
     player_draw_id = 0; // single ID for player
+    dirty;
+    force_redraw;
+    last_inventory_state;
 BEGIN
+    force_redraw = 1;
+    last_inventory_state = inventory_active;
     LOOP
-        IF (inventory_open == 0)
-            // Check if we need to redraw map (dirty rectangle approach)
-            IF (offset_x != prev_offset_x OR offset_y != prev_offset_y OR current_map != prev_map)
+        // Always delete previous NPC and player draws at start of frame
+        FOR (i = 0; i < npc_draw_count; i++)
+            delete_draw(npc_draw_ids[i]);
+        END
+        npc_draw_count = 0;
+        IF (player_draw_id != 0)
+            delete_draw(player_draw_id);
+            player_draw_id = 0;
+        END
+
+        IF (inventory_active == 0)
+            // Detect inventory state change to force redraw when closing
+            IF (inventory_active != last_inventory_state)
+                IF (inventory_active == 0)
+                    force_redraw = 1;
+                END
+                last_inventory_state = inventory_active;
+            END
+
+            // Dirty rectangle: only redraw if map or camera changes
+            dirty = 0;
+            IF (offset_x != prev_offset_x OR offset_y != prev_offset_y OR current_map != prev_map OR force_redraw == 1)
+                dirty = 1;
+            END
+
+            IF (dirty)
                 // Delete previous map draws
                 FOR (i = 0; i < draw_counter; i++)
                     delete_draw(draw_ids[i]);
                 END
                 draw_counter = 0;
 
-                // Set map dimensions based on current_map
+                // Current map dimensions
                 map_width = MapData[current_map].tilesX;
                 map_height = MapData[current_map].tilesY;
 
-                // Calculate visible tile range
+                // Visible tile range
                 IF (((-offset_x + 31) / 32) - 1 > 0) i_min = ((-offset_x + 31) / 32) - 1; ELSE i_min = 0; END
                 IF (map_width - 1 < ((ScreenConfig.width - offset_x) / 32) + 1) i_max = map_width - 1; ELSE i_max = ((ScreenConfig.width - offset_x) / 32) + 1; END
                 IF (((-offset_y + 31) / 32) - 1 > 0) j_min = ((-offset_y + 31) / 32) - 1; ELSE j_min = 0; END
@@ -359,15 +388,11 @@ BEGIN
                 prev_offset_x = offset_x;
                 prev_offset_y = offset_y;
                 prev_map = current_map;
+                force_redraw = 0;
+
             END
 
-            // Delete previous NPC draws
-            FOR (i = 0; i < npc_draw_count; i++)
-                delete_draw(npc_draw_ids[i]);
-            END
-            npc_draw_count = 0;
-
-            // Draw NPCs
+            // Draw NPCs (always when inventory not active)
             draw_z = ZLevels.npc;
             i = 0;
             WHILE (i < MAX_NPC)
@@ -393,15 +418,16 @@ BEGIN
                 i++;
             END
 
-            // Delete previous player draw
-            IF (player_draw_id != 0)
-                delete_draw(player_draw_id);
-                player_draw_id = 0;
-            END
-
-            // Draw player
+            // Draw player (always when inventory not active)
             draw_z = ZLevels.player;
             player_draw_id = draw(5, 15, 15, 0, ScreenConfig.width / 2 - 10, ScreenConfig.height / 2 - 10, ScreenConfig.width / 2 + 10, ScreenConfig.height / 2 + 10);
+        ELSE
+            // Inventory is open - clear map draws to avoid conflicts
+            // Clear map draws
+            FOR (i = 0; i < draw_counter; i++)
+                delete_draw(draw_ids[i]);
+            END
+            draw_counter = 0;
         END
 
         FRAME;
@@ -449,7 +475,7 @@ BEGIN
         END
 
         // Movement only if no dialogue and inventory not open
-        IF (DialogState.process_id == 0 AND inventory_open == 0)
+        IF (DialogState.process_id == 0 AND inventory_active == 0)
             IF (KEY(Controls.left))
                 new_x = player_x - speed;
                 tile_i = new_x / 32;
@@ -503,6 +529,10 @@ BEGIN
 
         // Check for exiting city boundaries
         IF (current_map != 0 AND (player_x < 0 OR player_x >= 256 OR player_y < 0 OR player_y >= 256))
+            // Force clean state before fade
+            prev_map = -1;
+            prev_offset_x = -9999;
+            prev_offset_y = -9999;
             // Fade out before exiting
             fade_off();
             // Determine exit direction
@@ -573,10 +603,10 @@ BEGIN
         screen_y = ScreenConfig.height / 2;
 
         IF (KEY(Controls.inventory))
-            IF (DialogState.press_timer == 0 AND inventory_close_timer == 0)
+            IF (DialogState.press_timer == 0 AND inventory_close_timer == 0 AND inventory_active == 0)
                 DialogState.press_timer = ScreenConfig.fps / 2;
                 inventory_screen();
-                inventory_close_timer = ScreenConfig.fps / 2;
+                inventory_close_timer = ScreenConfig.fps; // 1 second delay
             END
         END
 
@@ -612,7 +642,7 @@ BEGIN
 
         // Check interaction with NPCs
         IF (KEY(Controls.talk))
-            IF (enter_pressed == 0 AND closest_npc != -1 AND inventory_open == 0)
+            IF (enter_pressed == 0 AND closest_npc != -1 AND inventory_active == 0)
                 IF (DialogState.press_timer == 0)
                     DialogState.press_timer = ScreenConfig.fps / 3;
                     IF (DialogState.process_id == 0)
@@ -647,6 +677,10 @@ BEGIN
             tile_i = player_x / 32;
             tile_j = player_y / 32;
             IF (MapData[current_map].tiles[tile_i, tile_j] == Colors.city)
+                // Force clean state before fade
+                prev_map = -1;
+                prev_offset_x = -9999;
+                prev_offset_y = -9999;
                 // Fade out before entering city
                 fade_off();
                 // Enter city 1
@@ -693,6 +727,7 @@ PRIVATE
     letter_delay = 0;
     text_id = 0;
     name_id = 0;
+    indicator_id = 0; // For "press ENTER" indicator
     options_text_ids[2]; // For Yes/No options
     options_box_id = 0; // For options background box
     selected_option = 0;
@@ -706,6 +741,7 @@ PRIVATE
     complete = 0;
     INT input_timer = 0;
     INT enter_pressed = 0;
+    INT frame_counter = 0; // Frame counter for blinking effect
 BEGIN
     // Initialize options
     OptionStrings[0].normal = "  Yes";
@@ -714,16 +750,16 @@ BEGIN
     OptionStrings[1].selected = "> No";
     DialogState.closing = 0;
     DialogState.close_timer = 0;
-    DialogState.open_timer = ScreenConfig.fps / 2; // delay to avoid immediate closing
+    DialogState.open_timer = 5; // Short delay to avoid immediate closing
     DialogState.skip = 0;
     DialogState.complete = 0;
     DialogState.has_options = has_options;
     strcpy(DialogState.item_to_give, item_name);
     len = strlen(text);
 
-    // Draw dialogue box
+    // Draw main dialogue box (larger and semi-transparent)
     draw_z = ZLevels.dialog;
-    DialogState.box_id = draw(3, 0, 15, 0, 20, ScreenConfig.height - 70, ScreenConfig.width - 20, ScreenConfig.height - 20); // black rectangle
+    DialogState.box_id = draw(3, 0, 8, 0, 10, ScreenConfig.height - 90, ScreenConfig.width - 10, ScreenConfig.height - 10); // black semi-transparent rectangle
 
     // Write speaker name
     name_id = write(0, 30, ScreenConfig.height - 65, 0, name);
@@ -788,21 +824,33 @@ BEGIN
         END
         text_id = write(0, 30, ScreenConfig.height - 45, 0, temp);
 
+        // Show "press ENTER" indicator if complete and no options
+        IF (indicator_id != 0)
+            delete_text(indicator_id);
+            indicator_id = 0;
+        END
+        IF (complete == 1 AND DialogState.has_options == 0 AND DialogState.open_timer == 0)
+            // Blinking effect: show every 15 frames
+            IF ((frame_counter / 15) % 2 == 0)
+                indicator_id = write(0, ScreenConfig.width - 100, ScreenConfig.height - 25, 0, "[ENTER]");
+            END
+        END
+
         // Show options if complete and has options
         IF (complete == 1 AND DialogState.has_options == 1)
             IF (showing_options == 0)
+                // Open options menu and start a small input cooldown
                 showing_options = 1;
+                input_timer = ScreenConfig.fps / 6; // avoid auto-select on skip
+                // Treat current ENTER state as already consumed so a new
+                // key release + press is required before confirming
+                enter_pressed = 1;
             END
         END
         // Note: For non-option dialogues, wait for user to press ENTER to close
 
         // Handle options menu if showing
         IF (showing_options)
-            // Clear previous options box
-            IF (options_box_id != 0)
-                delete_draw(options_box_id);
-                options_box_id = 0;
-            END
             // Clear previous options texts
             i = 0;
             WHILE (i < 2)
@@ -813,21 +861,17 @@ BEGIN
                 i++;
             END
 
-            // Draw options box
-            draw_z = ZLevels.dialog;
-            options_box_id = draw(3, 7, 15, 0, 20, ScreenConfig.height - 50, ScreenConfig.width - 20, ScreenConfig.height - 5); // grey rectangle for options
-
             // Handle input
-            IF (KEY(_UP) AND input_timer == 0)
+            IF (KEY(Controls.up) AND input_timer == 0)
                 selected_option = (selected_option - 1 + 2) % 2;
                 input_timer = 5; // Pause for 5 frames
             END
-            IF (KEY(_DOWN) AND input_timer == 0)
+            IF (KEY(Controls.down) AND input_timer == 0)
                 selected_option = (selected_option + 1) % 2;
                 input_timer = 5; // Pause for 5 frames
             END
-            IF (KEY(_ENTER))
-                IF (enter_pressed == 0 AND DialogState.press_timer == 0)
+            IF (KEY(Controls.talk))
+                IF (enter_pressed == 0)
                     // Confirm selection
                     IF (selected_option == 0) // Yes
                         // Give item
@@ -840,7 +884,7 @@ BEGIN
                     DialogState.closing = 1;
                     showing_options = 0;
                     enter_pressed = 1;
-                    DialogState.press_timer = ScreenConfig.fps / 2;
+                    input_timer = 10; // Prevent immediate re-open
                 END
             ELSE
                 enter_pressed = 0;
@@ -885,6 +929,9 @@ BEGIN
                     END
                     delete_text(text_id);
                     delete_text(name_id);
+                    IF (indicator_id != 0)
+                        delete_text(indicator_id);
+                    END
                     IF (showing_options)
                         i = 0;
                         WHILE (i < 2)
@@ -900,7 +947,9 @@ BEGIN
                 END
             END
         END
+frame_counter++; // Increment frame counter
 
+        
         FRAME;
     END
 END
@@ -919,7 +968,7 @@ END
 // preventing map/NPC/player draws while inventory is active.
 PROCESS inventory_screen()
 PRIVATE
-    bg_id, title_id;
+    bg_id = 0, title_id = 0;
     STRUCT MenuOption[12]
         STRING text;
         INT text_id;
@@ -932,10 +981,20 @@ PRIVATE
     INT num_items_to_show;
     INT input_timer = 0;
     INT open_timer = 0;
+    INT exit_inventory = 0; // Flag to exit cleanly
+    INT do_exit_game = 0; // Flag to exit game after cleanup
 BEGIN
-    inventory_open = 1;
+    // Mark inventory as active
+    inventory_active = 1;
+    // Initialize all text IDs to 0
+    i = 0;
+    WHILE (i < 12)
+        MenuOption[i].text_id = 0;
+        i++;
+    END
+    
     // Prepare menu options
-    open_timer = ScreenConfig.fps / 2;
+    open_timer = 20; // ~0.67 seconds delay before allowing close
     num_items_to_show = item_count;
     IF (num_items_to_show > 8)
         num_items_to_show = 8;
@@ -987,16 +1046,21 @@ BEGIN
             ELSE
                 IF (selected == num_items_to_show)
                     // Back
-                    BREAK;
+                    exit_inventory = 1;
                 ELSE
-                    // Exit
-                    unload_song(song_id);
-                    EXIT("Goodbye", 0);
+                    // Exit game
+                    exit_inventory = 1;
+                    do_exit_game = 1;
                 END
             END
         END
         IF (KEY(Controls.inventory) AND open_timer == 0)
             // Back to game
+            exit_inventory = 1;
+        END
+        
+        // Check if we should exit
+        IF (exit_inventory)
             BREAK;
         END
 
@@ -1031,8 +1095,8 @@ BEGIN
 
         FRAME;
     END
-
-    // Clean up
+    
+    // Always cleanup - this code ALWAYS executes when we break from LOOP
     delete_draw(bg_id);
     delete_text(title_id);
     i = 0;
@@ -1042,5 +1106,11 @@ BEGIN
         END
         i++;
     END
-    inventory_open = 0;
+    inventory_active = 0;
+    
+    // Handle exit game if requested
+    IF (do_exit_game)
+        unload_song(song_id);
+        EXIT("Goodbye", 0);
+    END
 END
