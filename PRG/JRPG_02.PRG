@@ -158,13 +158,13 @@ BEGIN
 
     // City 2 NPCs
     NPCData[4].name = "City2 Elder";
-    NPCData[4].dialogue = "Chiadow, buy yourself an Evercade.";
+    NPCData[4].dialogue = "Chiadow, you should buy yourself an Evercade.";
     NPCData[4].x = 96; // 3*32
     NPCData[4].y = 64; // 2*32
     NPCData[4].color = 13; // Magenta
     NPCData[4].gives_item = 0;
     NPCData[5].name = "City2 Child";
-    NPCData[5].dialogue = "Eboke resigns!";
+    NPCData[5].dialogue = "Eboke resignation!";
     NPCData[5].x = 192; // 6*32
     NPCData[5].y = 160; // 5*32
     NPCData[5].color = 11; // Cyan
@@ -947,9 +947,8 @@ BEGIN
                 END
             END
         END
-frame_counter++; // Increment frame counter
+        frame_counter++; // Increment frame counter
 
-        
         FRAME;
     END
 END
