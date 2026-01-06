@@ -3,7 +3,7 @@
 // AUTHOR:      Sebastian J. MONCHO MAQUET
 // DATE:        04/01/2026
 // DESCRIPTION: Enhanced JRPG with significant rendering optimizations over JRPG_01.
-//              
+//
 //              KEY IMPROVEMENTS:
 //              - Dirty rectangle rendering: Map only redraws when camera/map changes
 //              - Consolidated rendering: All drawing in single map_drawer process
@@ -296,12 +296,12 @@ END
 // Central rendering process - MAIN IMPROVEMENT OVER JRPG_01.
 // Uses dirty rectangle optimization: only redraws map when camera offset or
 // current_map changes, drastically reducing draw calls per frame.
-// 
+//
 // Renders in order:
 // 1. Map tiles (only if dirty) - calculates visible tile range
 // 2. NPCs (every frame) - checks visibility and current map
 // 3. Player (every frame) - always centered on screen
-// 
+//
 // All drawing consolidated here eliminates separate NPC processes,
 // improving performance and simplifying draw ID management.
 PROCESS map_drawer()
@@ -309,8 +309,11 @@ PRIVATE
     i, j, color, x1, y1, x2, y2;
     i_min, i_max, j_min, j_max;
     map_width, map_height;
-    draw_ids[256]; // array for draw IDs (maximum safe)
+    draw_ids[256]; // array for map draw IDs (maximum safe)
     draw_counter = 0;
+    npc_draw_ids[MAX_NPC]; // separate array for NPC draw IDs
+    npc_draw_count = 0;
+    player_draw_id = 0; // single ID for player
 BEGIN
     LOOP
         IF (inventory_open == 0)
@@ -351,13 +354,19 @@ BEGIN
                     END
                     i++;
                 END
-                
+
                 // Update previous values
                 prev_offset_x = offset_x;
                 prev_offset_y = offset_y;
                 prev_map = current_map;
             END
-            
+
+            // Delete previous NPC draws
+            FOR (i = 0; i < npc_draw_count; i++)
+                delete_draw(npc_draw_ids[i]);
+            END
+            npc_draw_count = 0;
+
             // Draw NPCs
             draw_z = ZLevels.npc;
             i = 0;
@@ -377,17 +386,22 @@ BEGIN
                     y1 = NPCData[i].y + offset_y;
                     // Check if visible on screen
                     IF (x1 + 10 > 0 AND x1 - 10 < ScreenConfig.width AND y1 + 10 > 0 AND y1 - 10 < ScreenConfig.height)
-                        draw_ids[draw_counter] = draw(5, NPCData[i].color, 15, 0, x1 - 10, y1 - 10, x1 + 10, y1 + 10);
-                        draw_counter++;
+                        npc_draw_ids[npc_draw_count] = draw(5, NPCData[i].color, 15, 0, x1 - 10, y1 - 10, x1 + 10, y1 + 10);
+                        npc_draw_count++;
                     END
                 END
                 i++;
             END
-            
+
+            // Delete previous player draw
+            IF (player_draw_id != 0)
+                delete_draw(player_draw_id);
+                player_draw_id = 0;
+            END
+
             // Draw player
             draw_z = ZLevels.player;
-            draw_ids[draw_counter] = draw(5, 15, 15, 0, ScreenConfig.width / 2 - 10, ScreenConfig.height / 2 - 10, ScreenConfig.width / 2 + 10, ScreenConfig.height / 2 + 10);
-            draw_counter++;
+            player_draw_id = draw(5, 15, 15, 0, ScreenConfig.width / 2 - 10, ScreenConfig.height / 2 - 10, ScreenConfig.width / 2 + 10, ScreenConfig.height / 2 + 10);
         END
 
         FRAME;
@@ -395,7 +409,7 @@ BEGIN
 END
 
 // Handles all player logic and interactions.
-// 
+//
 // RESPONSIBILITIES:
 // - Movement input processing with terrain-based speed modulation
 // - Collision detection: prevents movement into water tiles
@@ -403,7 +417,7 @@ END
 // - NPC proximity detection and interaction triggering
 // - Map transition detection when stepping on city tiles
 // - Inventory and dialogue system integration
-// 
+//
 // Note: Player rendering moved to map_drawer for optimized draw order.
 PROCESS player()
 PRIVATE
@@ -417,6 +431,8 @@ PRIVATE
     i;
     npc_map;
     exit_direction;
+    INT enter_pressed = 0;
+    INT inventory_close_timer = 0;
 BEGIN
     x = player_x;
     y = player_y;
@@ -564,9 +580,10 @@ BEGIN
         screen_y = ScreenConfig.height / 2;
 
         IF (KEY(Controls.inventory))
-            IF (DialogState.press_timer == 0)
-                DialogState.press_timer = ScreenConfig.fps / 3;
+            IF (DialogState.press_timer == 0 AND inventory_close_timer == 0)
+                DialogState.press_timer = ScreenConfig.fps / 2;
                 inventory_screen();
+                inventory_close_timer = ScreenConfig.fps / 2;
             END
         END
 
@@ -601,26 +618,35 @@ BEGIN
         END
 
         // Check interaction with NPCs
-        IF (closest_npc != -1 AND KEY(Controls.talk) AND inventory_open == 0)
-            IF (DialogState.press_timer == 0)
-                DialogState.press_timer = ScreenConfig.fps / 3;
-                IF (DialogState.process_id == 0)
-                    DialogState.process_id = dialogue(NPCData[closest_npc].name, NPCData[closest_npc].dialogue, NPCData[closest_npc].gives_item, NPCData[closest_npc].item_name);
-                ELSE
-                    IF (DialogState.open_timer == 0)
-                        IF (DialogState.complete == 1)
-                            DialogState.closing = 1;
-                        ELSE
-                            DialogState.skip = 1;
+        IF (KEY(Controls.talk))
+            IF (enter_pressed == 0 AND closest_npc != -1 AND inventory_open == 0)
+                IF (DialogState.press_timer == 0)
+                    DialogState.press_timer = ScreenConfig.fps / 3;
+                    IF (DialogState.process_id == 0)
+                        DialogState.process_id = dialogue(NPCData[closest_npc].name, NPCData[closest_npc].dialogue, NPCData[closest_npc].gives_item, NPCData[closest_npc].item_name);
+                    ELSE
+                        IF (DialogState.open_timer == 0)
+                            IF (DialogState.complete == 1)
+                                DialogState.closing = 1;
+                            ELSE
+                                DialogState.skip = 1;
+                            END
                         END
                     END
                 END
+                enter_pressed = 1;
             END
+        ELSE
+            enter_pressed = 0;
         END
 
         // Decrement press timer
         IF (DialogState.press_timer > 0)
             DialogState.press_timer--;
+        END
+        // Decrement inventory close timer
+        IF (inventory_close_timer > 0)
+            inventory_close_timer--;
         END
 
         // Check for map transitions
@@ -656,7 +682,7 @@ BEGIN
 END
 
 // Manages the interactive dialogue system with optional yes/no choices.
-// 
+//
 // FEATURES:
 // - Letter-by-letter text animation with configurable speed
 // - Skippable text animation (press ENTER to complete instantly)
@@ -665,7 +691,7 @@ END
 // - Automatic closing for simple dialogues
 // - Manual closing for choice dialogues after selection
 // - Proper z-leveling to appear above all other elements
-// 
+//
 // Creates dialogue box, name display, and manages all UI cleanup.
 PROCESS dialogue(STRING name, STRING text, INT has_options, STRING item_name[10])
 PRIVATE
@@ -686,6 +712,7 @@ PRIVATE
     len;
     complete = 0;
     INT input_timer = 0;
+    INT enter_pressed = 0;
 BEGIN
     // Initialize options
     OptionStrings[0].normal = "  Yes";
@@ -694,7 +721,7 @@ BEGIN
     OptionStrings[1].selected = "> No";
     DialogState.closing = 0;
     DialogState.close_timer = 0;
-    DialogState.open_timer = ScreenConfig.fps / 3; // delay to avoid immediate closing
+    DialogState.open_timer = ScreenConfig.fps / 2; // delay to avoid immediate closing
     DialogState.skip = 0;
     DialogState.complete = 0;
     DialogState.has_options = has_options;
@@ -800,17 +827,23 @@ BEGIN
                 input_timer = 5; // Pause for 5 frames
             END
             IF (KEY(_ENTER))
-                // Confirm selection
-                IF (selected_option == 0) // Yes
-                    // Give item
-                    IF (item_count < 10)
-                        strcpy(inventory[item_count].item, DialogState.item_to_give);
-                        item_count++;
+                IF (enter_pressed == 0 AND DialogState.press_timer == 0)
+                    // Confirm selection
+                    IF (selected_option == 0) // Yes
+                        // Give item
+                        IF (item_count < 10)
+                            strcpy(inventory[item_count].item, DialogState.item_to_give);
+                            item_count++;
+                        END
                     END
+                    // Close
+                    DialogState.closing = 1;
+                    showing_options = 0;
+                    enter_pressed = 1;
+                    DialogState.press_timer = ScreenConfig.fps / 2;
                 END
-                // Close
-                DialogState.closing = 1;
-                showing_options = 0;
+            ELSE
+                enter_pressed = 0;
             END
 
             // Draw options
@@ -873,7 +906,7 @@ BEGIN
 END
 
 // Displays the inventory screen with full item management.
-// 
+//
 // FEATURES:
 // - Blue fullscreen background at dedicated z-level
 // - Scrollable item list (shows up to 8 items)
@@ -881,7 +914,7 @@ END
 // - Item selection (use functionality placeholder)
 // - Back option to return to game
 // - Exit game option
-// 
+//
 // Sets inventory_open flag to pause rendering in map_drawer,
 // preventing map/NPC/player draws while inventory is active.
 PROCESS inventory_screen()
@@ -898,9 +931,11 @@ PRIVATE
     STRING current_item;
     INT num_items_to_show;
     INT input_timer = 0;
+    INT open_timer = 0;
 BEGIN
     inventory_open = 1;
     // Prepare menu options
+    open_timer = ScreenConfig.fps / 2;
     num_items_to_show = item_count;
     IF (num_items_to_show > 8)
         num_items_to_show = 8;
@@ -923,6 +958,10 @@ BEGIN
         IF (input_timer > 0)
             input_timer--;
         END
+        // Decrement open timer
+        IF (open_timer > 0)
+            open_timer--;
+        END
         // Clear previous texts
         i = 0;
         WHILE (i < menu_count)
@@ -934,15 +973,15 @@ BEGIN
         END
 
         // Handle input
-        IF (KEY(_UP) AND input_timer == 0)
+        IF (KEY(Controls.up) AND input_timer == 0)
             selected = (selected - 1 + menu_count) % menu_count;
             input_timer = 5; // Pause for 5 frames
         END
-        IF (KEY(_DOWN) AND input_timer == 0)
+        IF (KEY(Controls.down) AND input_timer == 0)
             selected = (selected + 1) % menu_count;
             input_timer = 5; // Pause for 5 frames
         END
-        IF (KEY(_ENTER))
+        IF (KEY(Controls.talk))
             IF (selected < num_items_to_show)
                 // Use item - for now, do nothing
             ELSE
@@ -955,6 +994,10 @@ BEGIN
                     EXIT("Goodbye", 0);
                 END
             END
+        END
+        IF (KEY(Controls.inventory) AND open_timer == 0)
+            // Back to game
+            BREAK;
         END
 
         // Draw menu options
@@ -1001,4 +1044,3 @@ BEGIN
     END
     inventory_open = 0;
 END
-
