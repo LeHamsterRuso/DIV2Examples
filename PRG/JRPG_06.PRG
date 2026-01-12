@@ -156,13 +156,6 @@ GLOBAL
         INT city = 5;
         INT forest = 6;
     END
-    STRUCT ZLevels
-        INT map = 100;           // Map at the back
-        INT npc = 0;             // NPCs over map
-        INT player = -10;        // Player over map
-        INT inventory_bg = -150; // Inventory background
-        INT dialog = -200;       // Dialogue over everything
-    END
     STRUCT ScreenConfig
         INT width = 320;
         INT height = 200;
@@ -400,7 +393,6 @@ BEGIN
             IF (map_height - 1 < ((ScreenConfig.height - offset_y) / 32) + 1) j_max = map_height - 1; ELSE j_max = ((ScreenConfig.height - offset_y) / 32) + 1; END
 
             // Apply zoom effect during dialogues
-            draw_z = ZLevels.map;
 
             i = i_min;
             WHILE (i <= i_max)
@@ -429,7 +421,6 @@ BEGIN
             force_redraw = 0;
 
             // Draw NPCs
-            draw_z = ZLevels.npc;
             i = 0;
             WHILE (i < MapData[current_map].npc_count)
                 // Calculate screen position
@@ -470,7 +461,6 @@ BEGIN
             // Draw player shadow
             xput(hud_fpg_id, 3, ScreenConfig.width / 2, ScreenConfig.height / 2, 0, dialogue_zoom, 4, 0);
             // Draw player sprite
-            draw_z = ZLevels.player;
             xput(player_fpg_id, PlayerData.graph, ScreenConfig.width / 2, ScreenConfig.height / 2 - 24, 0, dialogue_zoom, 0, 0);
         END
 
@@ -939,7 +929,7 @@ BEGIN
 
     name_id = write(0, 30, ScreenConfig.height - 45, 0, name);
     LOOP
-        // Verificar si los menús están activos - cerrar diálogo si es así
+        // Check if menus are active - close dialogue if so
         IF (inventory_active == 1)
             DialogState.closing = 1;
         END
@@ -953,7 +943,6 @@ BEGIN
         END
 
         // Draw dialogue box
-        draw_z = ZLevels.dialog;
         put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
 
         IF (DialogState.open_timer > 0)
@@ -1223,7 +1212,6 @@ BEGIN
 
     open_timer = 20;
 
-    draw_z = ZLevels.inventory_bg;
     put(hud_fpg_id, 2, ScreenConfig.width / 2, ScreenConfig.height / 2);
 
     title_id = write(0, ScreenConfig.width / 2, 10, 4, "Pause Menu");
@@ -1268,12 +1256,11 @@ BEGIN
                 END
                 submenu_finished = 0;
                 quests_screen();
-                // Esperar a que el submenú termine completamente
+                // Wait for the submenu to finish completely
                 WHILE (submenu_finished == 0)
                     FRAME;
                 END
                 clear_screen();
-                draw_z = ZLevels.inventory_bg;
                 put(hud_fpg_id, 2, ScreenConfig.width / 2, ScreenConfig.height / 2);
                 title_id = write(0, ScreenConfig.width / 2, 10, 4, "Pause Menu");
                 input_timer = 5;
@@ -1292,12 +1279,11 @@ BEGIN
                     END
                     submenu_finished = 0;
                     items_screen();
-                    // Esperar a que el submenú termine completamente
+                    // Wait for the submenu to finish completely
                     WHILE (submenu_finished == 0)
                         FRAME;
                     END
                     clear_screen();
-                    draw_z = ZLevels.inventory_bg;
                     put(hud_fpg_id, 2, ScreenConfig.width / 2, ScreenConfig.height / 2);
                     title_id = write(0, ScreenConfig.width / 2, 10, 4, "Pause Menu");
                     input_timer = 20;
@@ -1394,7 +1380,6 @@ BEGIN
 
     open_timer = 10;
 
-    draw_z = ZLevels.inventory_bg;
     put(hud_fpg_id, 2, ScreenConfig.width / 2, ScreenConfig.height / 2);
 
     title_id = write(0, ScreenConfig.width / 2, 10, 4, "Quests");
@@ -1547,7 +1532,6 @@ BEGIN
     END
     menu_count = item_count + 1; // +1 for Back option
 
-    draw_z = ZLevels.inventory_bg;
     put(hud_fpg_id, 2, ScreenConfig.width / 2, ScreenConfig.height / 2);
 
     title_id = write(0, ScreenConfig.width / 2, 10, 4, "Items");

@@ -108,13 +108,6 @@ GLOBAL
         INT city = 5;
         INT forest = 6;
     END
-    STRUCT ZLevels
-        INT map = 100;           // Map at the back
-        INT npc = 0;             // NPCs over map
-        INT player = -10;        // Player over map
-        INT inventory_bg = -150; // Inventory background
-        INT dialog = -200;       // Dialogue over everything
-    END
     STRUCT ScreenConfig
         INT width = 320;
         INT height = 200;
@@ -354,7 +347,6 @@ BEGIN
             force_redraw = 0;
 
             // Draw NPCs (always when inventory not active)
-            draw_z = ZLevels.npc;
             i = 0;
             WHILE (i < MapData[current_map].npc_count)
                 // Calculate screen position
@@ -392,7 +384,6 @@ BEGIN
             // Draw player shadow first (behind player) with transparency
             xput(hud_fpg_id, 3, ScreenConfig.width / 2, ScreenConfig.height / 2, 0, 100, 4, 0);
             // Draw player sprite 24 pixels higher (always when inventory not active)
-            draw_z = ZLevels.player;
             put(player_fpg_id, PlayerData.graph, ScreenConfig.width / 2, ScreenConfig.height / 2 - 24);
         END
         // Note: inventory_screen process handles its own clear_screen()
@@ -789,7 +780,6 @@ BEGIN
     LOOP
 
         // Draw main dialogue box using HUD sprite (must redraw each frame)
-        draw_z = ZLevels.dialog;
         put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
 
         // Decrement open timer
@@ -1055,7 +1045,6 @@ BEGIN
     END
 
     // Draw inventory background using HUD sprite
-    draw_z = ZLevels.inventory_bg;
     put(hud_fpg_id, 2, ScreenConfig.width / 2, ScreenConfig.height / 2);
 
     // Title
