@@ -682,8 +682,10 @@ BEGIN
         tile_j = PlayerData.y / 32;
         IF (current_map == 0)
             speed = 5;
-            IF (MapData[current_map].tiles[tile_i, tile_j] == TileTypes.forest OR MapData[current_map].tiles[tile_i, tile_j] == TileTypes.mountain)
-                speed = 2;
+            IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+                IF (MapData[current_map].tiles[tile_i, tile_j] == TileTypes.forest OR MapData[current_map].tiles[tile_i, tile_j] == TileTypes.mountain)
+                    speed = 2;
+                END
             END
         ELSE
             speed = 5;
@@ -696,10 +698,12 @@ BEGIN
                 tile_i = new_x / 32;
                 tile_j = PlayerData.y / 32;
                 IF (current_map == 0)
-                    IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
-                        PlayerData.x = new_x;
-                        moving = 1;
-                        new_direction = 4;
+                    IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+                        IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
+                            PlayerData.x = new_x;
+                            moving = 1;
+                            new_direction = 4;
+                        END
                     END
                 ELSE
                     PlayerData.x = new_x;
@@ -712,10 +716,12 @@ BEGIN
                 tile_i = new_x / 32;
                 tile_j = PlayerData.y / 32;
                 IF (current_map == 0)
-                    IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
-                        PlayerData.x = new_x;
-                        moving = 1;
-                        new_direction = 2;
+                    IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+                        IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
+                            PlayerData.x = new_x;
+                            moving = 1;
+                            new_direction = 2;
+                        END
                     END
                 ELSE
                     PlayerData.x = new_x;
@@ -728,10 +734,12 @@ BEGIN
                 tile_i = PlayerData.x / 32;
                 tile_j = new_y / 32;
                 IF (current_map == 0)
-                    IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
-                        PlayerData.y = new_y;
-                        moving = 1;
-                        new_direction = 1;
+                    IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+                        IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
+                            PlayerData.y = new_y;
+                            moving = 1;
+                            new_direction = 1;
+                        END
                     END
                 ELSE
                     PlayerData.y = new_y;
@@ -744,10 +752,12 @@ BEGIN
                 tile_i = PlayerData.x / 32;
                 tile_j = new_y / 32;
                 IF (current_map == 0)
-                    IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
-                        PlayerData.y = new_y;
-                        moving = 1;
-                        new_direction = 3;
+                    IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+                        IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
+                            PlayerData.y = new_y;
+                            moving = 1;
+                            new_direction = 3;
+                        END
                     END
                 ELSE
                     PlayerData.y = new_y;
@@ -916,7 +926,7 @@ BEGIN
 
         // Check interaction with NPCs
         IF (KEY(Controls.talk))
-            IF (enter_pressed == 0 AND closest_npc != -1 AND inventory_active == 0 AND inventory_close_timer == 0)
+            IF (enter_pressed == 0 AND closest_npc != -1 AND inventory_active == 0 AND inventory_close_timer == 0 AND in_battle == 0)
                 IF (DialogState.press_timer == 0)
                     DialogState.press_timer = ScreenConfig.fps / 2;
                     IF (DialogState.process_id == 0)
