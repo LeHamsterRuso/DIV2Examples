@@ -20,6 +20,14 @@ CONST
     QUEST_NOT_STARTED = 0;
     QUEST_ACTIVE = 1;
     QUEST_COMPLETED = 2;
+    // Game constants
+    TILE_SIZE = 32;
+    NORMAL_ZOOM = 100;
+    INTERACTION_DISTANCE = 50;
+    MAX_ITEMS = 10;
+    MAX_MAPS = 3;
+    MAX_NPCS_PER_MAP = 10;
+    MAX_CGS = 10;
 GLOBAL
     STRUCT ItemList[20]
         STRING name[20];
@@ -33,7 +41,7 @@ GLOBAL
         INT max_mp;
         INT attack;
         INT defense;
-        INT graph; // Graph ID in MONSTERS.FPG
+        INT sprite_graph_id; // Graph ID in MONSTERS.FPG
         INT reward_item_id; // Item to give when defeated
         INT reward_gold; // Gold to give when defeated
     END
@@ -63,6 +71,11 @@ GLOBAL
         INT spell_count;
     END
     INT hero_list_count = 0;
+    STRUCT MenuOption[12]
+        STRING text;
+        INT text_id;
+        INT desc_id;
+    END
     offset_x = 0;
     offset_y = 0;
     current_map = 0; // 0 = world, 1 = city1, 2 = city2
@@ -79,7 +92,7 @@ GLOBAL
     STRUCT PlayerData
         INT x = 160;
         INT y = 120;
-        INT graph = 2;
+        INT sprite_graph_id = 2;
         INT direction = 2;
         INT anim_frame = 0;
         INT anim_counter = 0;
@@ -94,7 +107,7 @@ GLOBAL
     prev_offset_x = -1;
     prev_offset_y = -1;
     prev_map = 0;
-    STRUCT Inventory[10]
+    STRUCT Inventory[MAX_ITEMS]
         STRING item[20];
         INT quantity;
         STRING description[50];
@@ -104,7 +117,7 @@ GLOBAL
     INT inventory_active = 0; // True while inventory_screen process is running
     INT submenu_finished = 0; // Flag to signal when submenu has finished
     INT force_redraw = 0; // Force map redraw
-    INT dialogue_zoom = 100; // Zoom level during dialogues (100 = normal, 150 = 1.5x)
+    INT dialogue_zoom = NORMAL_ZOOM; // Zoom level during dialogues (100 = normal, 150 = 1.5x)
     // CG Gallery system
     INT cg_fpg_id; // FPG ID for CG images
     INT cg_unlocked[10]; // Array to track which CGs are unlocked (1 = unlocked, 0 = locked)
@@ -120,7 +133,7 @@ GLOBAL
         INT inventory;
         INT exit;
     END
-    STRUCT MapData[3]
+    STRUCT MapData[MAX_MAPS]
         INT tiles[32,24];
         INT tilesX;
         INT tilesY;
@@ -133,7 +146,7 @@ GLOBAL
             INT target_y;
         END
         INT teleport_count;
-        STRUCT NPCData[10]
+        STRUCT NPCData[MAX_NPCS_PER_MAP]
             STRING name[20];
             STRUCT dialogues[5]
                 STRING dialogue[50];
@@ -146,7 +159,7 @@ GLOBAL
             INT gives_item;
             INT item_id;
             INT npc_id;
-            INT graph;
+            INT sprite_graph_id;
             STRING fpg_file[30];
             // Quest data
             INT has_quest;
@@ -224,11 +237,22 @@ GLOBAL
         INT height = 200;
         INT fps = 30;
     END
-    INT fpg_ids[3]; // FPG IDs for each map
+    INT fpg_ids[MAX_MAPS]; // FPG IDs for each map
     INT npc_fpg_ids[6]; // FPG IDs for each NPC
     INT hud_fpg_id; // FPG ID for HUD elements
     INT player_fpg_id; // FPG ID for player graphics
     INT monsters_fpg_id; // FPG ID for monster graphics
+    STRUCT Enemies[3] // Battle enemies array
+        INT monster_id;
+        INT current_hp;
+        INT max_hp;
+        INT alive;
+        INT dying;
+        INT dying_timer;
+        INT size;
+    END
+    INT selecting_target = 0;
+    INT selected_target = 0;
 BEGIN
     set_mode(ScreenConfig.width * 1000 + ScreenConfig.height);
     set_fps(ScreenConfig.fps, 0);
@@ -261,30 +285,30 @@ BEGIN
     InitCGStates();
 
     // Load item database from file
-    LoadItemsData();
+    IF (LoadItemsData() == -1)
+        EXIT("ItemsV5.dat file missing! Please run MAPGEN05.PRG first.", 1);
+    END
 
     // Load monster database from file
-    LoadMonstersData();
+    IF (LoadMonstersData() == -1)
+        EXIT("Monsters.dat file missing! Please run MAPGEN05.PRG first.", 1);
+    END
 
     // Load hero database from file
-    LoadHeroesData();
+    IF (LoadHeroesData() == -1)
+        EXIT("HeroesV5.dat file missing! Please run MAPGEN05.PRG first.", 1);
+    END
 
     // Initialize PlayerStats from HeroList
-    PlayerStats.name = HeroList[0].name;
-    PlayerStats.max_hp = HeroList[0].hp;
-    PlayerStats.current_hp = HeroList[0].hp;
-    PlayerStats.max_mp = HeroList[0].mp;
-    PlayerStats.current_mp = HeroList[0].mp;
-    PlayerStats.attack = HeroList[0].str;
-    PlayerStats.defense = HeroList[0].def;
+    InitPlayerStats();
 
     // Load map data from file (maps, NPCs, teleports)
-    LoadMapsData();
+    IF (LoadMapsData() == -1)
+        EXIT("MapsV5.dat file missing! Please run MAPGEN05.PRG first.", 1);
+    END
 
     // Load initial background music from map data
-    song_id = load_song(MapData[0].map_song, 1); // 1 for indefinite loop
-    song(song_id);
-    current_song = MapData[0].map_song;
+    InitInitialMusic();
 
     // Load FPG files dynamically from map data
     LoadMapFPGs();
@@ -293,34 +317,60 @@ BEGIN
     map_drawer();
     player();
     hud_display();
+
+    // Needed, do not remove this loop
     LOOP
         FRAME;
     END
 END
 
 // Initialize all quest states to NOT_STARTED
-PROCESS InitQuestStates()
+FUNCTION InitQuestStates()
 PRIVATE
     i;
 BEGIN
     FROM i = 0 TO 9;
         quest_states[i] = QUEST_NOT_STARTED;
     END
+    RETURN(0);
 END
 
 // Initialize all CG states to locked (0)
-PROCESS InitCGStates()
+FUNCTION InitCGStates()
 PRIVATE
     i;
 BEGIN
     FROM i = 0 TO 9;
         cg_unlocked[i] = 0; // All CGs start locked
     END
+    RETURN(0);
+END
+
+// Initialize PlayerStats from HeroList
+FUNCTION InitPlayerStats()
+BEGIN
+    PlayerStats.name = HeroList[0].name;
+    PlayerStats.max_hp = HeroList[0].hp;
+    PlayerStats.current_hp = HeroList[0].hp;
+    PlayerStats.max_mp = HeroList[0].mp;
+    PlayerStats.current_mp = HeroList[0].mp;
+    PlayerStats.attack = HeroList[0].str;
+    PlayerStats.defense = HeroList[0].def;
+    RETURN(0);
+END
+
+// Initialize initial background music
+FUNCTION InitInitialMusic()
+BEGIN
+    song_id = load_song(MapData[0].map_song, 1); // 1 for indefinite loop
+    song(song_id);
+    current_song = MapData[0].map_song;
+    RETURN(0);
 END
 
 // Loads monster database from Monsters.dat file.
 // Reads all available monsters with their stats and rewards.
-PROCESS LoadMonstersData()
+FUNCTION LoadMonstersData()
 PRIVATE
     file_handle;
     data_size;
@@ -331,7 +381,7 @@ BEGIN
     IF (file_handle == 0)
         // File doesn't exist - show error
         write(0, 10, 10, 0, "ERROR: Monsters.dat not found! Please run MAPGEN05.PRG first.");
-        EXIT("Monsters.dat missing", 1);
+        RETURN(-1);
     END
 
     // Read monster_list_count first
@@ -343,11 +393,12 @@ BEGIN
 
     // Close the file
     fclose(file_handle);
+    RETURN(0);
 END
 
 // Loads hero database from HeroesV5.dat file.
 // Reads all available heroes with their stats and spells.
-PROCESS LoadHeroesData()
+FUNCTION LoadHeroesData()
 PRIVATE
     file_handle;
     data_size;
@@ -358,7 +409,7 @@ BEGIN
     IF (file_handle == 0)
         // File doesn't exist - show error
         write(0, 10, 10, 0, "ERROR: HeroesV5.dat not found! Please run MAPGEN05.PRG first.");
-        EXIT("HeroesV5.dat missing", 1);
+        RETURN(-1);
     END
 
     // Read hero_list_count first
@@ -370,11 +421,12 @@ BEGIN
 
     // Close the file
     fclose(file_handle);
+    RETURN(0);
 END
 
 // Loads item database from ItemsV5.dat file.
 // Reads all available items with their descriptions and prices.
-PROCESS LoadItemsData()
+FUNCTION LoadItemsData()
 PRIVATE
     file_handle;
     data_size;
@@ -385,7 +437,7 @@ BEGIN
     IF (file_handle == 0)
         // File doesn't exist - show error
         write(0, 10, 10, 0, "ERROR: ItemsV5.dat not found! Please run MAPGEN05.PRG first.");
-        EXIT("ItemsV5.dat missing", 1);
+        RETURN(-1);
     END
 
     // Read item_list_count first
@@ -397,11 +449,12 @@ BEGIN
 
     // Close the file
     fclose(file_handle);
+    RETURN(0);
 END
 
 // Loads all map data from MapsV5.dat file.
 // Reads map tiles, NPCs, teleports, and quest data for all maps from external file.
-PROCESS LoadMapsData()
+FUNCTION LoadMapsData()
 PRIVATE
     file_handle;
     data_size;
@@ -412,7 +465,7 @@ BEGIN
     IF (file_handle == 0)
         // File doesn't exist - show error
         write(0, 10, 10, 0, "ERROR: MapsV5.dat not found! Please run MAPGEN05.PRG first.");
-        EXIT("MapsV5.dat missing", 1);
+        RETURN(-1);
     END
 
     // Get size of MapData structure
@@ -422,14 +475,16 @@ BEGIN
     IF (fread(OFFSET MapData, data_size, file_handle) == 0)
         // Error reading file
         write(0, 10, 10, 0, "Error loading MapsV5.dat!");
+        RETURN(-1);
     END
 
     // Close the file
     fclose(file_handle);
+    RETURN(0);
 END
 
 // Loads FPG files dynamically from map data.
-PROCESS LoadMapFPGs()
+FUNCTION LoadMapFPGs()
 PRIVATE
     i, j, k;
     STRING loaded_npcs[6];
@@ -437,15 +492,12 @@ PRIVATE
     INT already_loaded;
 BEGIN
     // Load map FPGs
-    i = 0;
-    WHILE (i < 3)
+    FROM i=0 TO MAX_MAPS-1;
         fpg_ids[i] = load_fpg(MapData[i].fpg_file);
-        i++;
     END
 
     // Load NPC FPGs (avoiding duplicates)
-    i = 0;
-    WHILE (i < 3) // For each map
+    FROM i=0 TO MAX_MAPS-1; // For each map
         j = 0;
         WHILE (j < MapData[i].npc_count) // For each NPC in map
             // Check if this FPG is already loaded
@@ -465,12 +517,12 @@ BEGIN
             END
             j++;
         END
-        i++;
     END
+    RETURN(0);
 END
 
 // Initializes the Controls struct with keyboard bindings.
-PROCESS InitControls()
+FUNCTION InitControls()
 BEGIN
     Controls.left = _LEFT;
     Controls.right = _RIGHT;
@@ -479,10 +531,11 @@ BEGIN
     Controls.talk = _ENTER;
     Controls.inventory = _ESC;
     Controls.exit = _F10;
+    RETURN(0);
 END
 
 // Changes the background music if different from current
-PROCESS ChangeSong(STRING new_song)
+FUNCTION ChangeSong(STRING new_song)
 BEGIN
     IF (strcmp(current_song, new_song) != 0)
         unload_song(song_id);
@@ -490,12 +543,282 @@ BEGIN
         song(song_id);
         current_song = new_song;
     END
+    RETURN(0);
 END
 
 // Calculates frames for a given number of seconds based on current FPS
-PROCESS estimatedSeconds(INT seconds)
+FUNCTION seconds_to_frames(INT seconds)
 BEGIN
     RETURN(seconds * ScreenConfig.fps);
+END
+
+// Waits for menu keys to be released
+FUNCTION wait_for_key_release()
+BEGIN
+    WHILE (KEY(Controls.up) OR KEY(Controls.down) OR KEY(Controls.talk) OR KEY(Controls.inventory))
+        FRAME;
+    END
+END
+
+// Handles player movement logic
+FUNCTION handle_movement(INT moving_offset, INT new_direction_offset, INT speed_offset)
+PRIVATE
+    tile_i, tile_j;
+    new_x, new_y;
+BEGIN
+    *moving_offset = 0;
+    *new_direction_offset = PlayerData.direction;
+
+    // Calculate current tile and speed
+    tile_i = PlayerData.x / TILE_SIZE;
+    tile_j = PlayerData.y / TILE_SIZE;
+    IF (current_map == 0)
+        *speed_offset = 5;
+        IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+            IF (MapData[current_map].tiles[tile_i, tile_j] == TileTypes.forest OR MapData[current_map].tiles[tile_i, tile_j] == TileTypes.mountain)
+                *speed_offset = 2;
+            END
+        END
+    ELSE
+        *speed_offset = 5;
+    END
+
+    // Movement
+    IF (DialogState.process_id == 0 AND inventory_active == 0 AND in_battle == 0)
+        IF (KEY(Controls.left))
+            new_x = PlayerData.x - *speed_offset;
+            tile_i = new_x / 32;
+            tile_j = PlayerData.y / 32;
+            IF (current_map == 0)
+                IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+                    IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
+                        PlayerData.x = new_x;
+                        *moving_offset = 1;
+                        *new_direction_offset = 4;
+                    END
+                END
+            ELSE
+                PlayerData.x = new_x;
+                *moving_offset = 1;
+                *new_direction_offset = 4;
+            END
+        END
+        IF (KEY(Controls.right))
+            new_x = PlayerData.x + *speed_offset;
+            tile_i = new_x / 32;
+            tile_j = PlayerData.y / 32;
+            IF (current_map == 0)
+                IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+                    IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
+                        PlayerData.x = new_x;
+                        *moving_offset = 1;
+                        *new_direction_offset = 2;
+                    END
+                END
+            ELSE
+                PlayerData.x = new_x;
+                *moving_offset = 1;
+                *new_direction_offset = 2;
+            END
+        END
+        IF (KEY(Controls.up))
+            new_y = PlayerData.y - *speed_offset;
+            tile_i = PlayerData.x / 32;
+            tile_j = new_y / 32;
+            IF (current_map == 0)
+                IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+                    IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
+                        PlayerData.y = new_y;
+                        *moving_offset = 1;
+                        *new_direction_offset = 1;
+                    END
+                END
+            ELSE
+                PlayerData.y = new_y;
+                *moving_offset = 1;
+                *new_direction_offset = 1;
+            END
+        END
+        IF (KEY(Controls.down))
+            new_y = PlayerData.y + *speed_offset;
+            tile_i = PlayerData.x / 32;
+            tile_j = new_y / 32;
+            IF (current_map == 0)
+                IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
+                    IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
+                        PlayerData.y = new_y;
+                        *moving_offset = 1;
+                        *new_direction_offset = 3;
+                    END
+                END
+            ELSE
+                PlayerData.y = new_y;
+                *moving_offset = 1;
+                *new_direction_offset = 3;
+            END
+        END
+    END
+END
+
+// Handles player animation updates
+FUNCTION handle_animations(INT moving, INT new_direction)
+BEGIN
+    // Update player animation
+    PlayerData.direction = new_direction;
+
+    IF (moving)
+        PlayerData.anim_counter++;
+        IF (PlayerData.anim_counter >= 5)
+            PlayerData.anim_counter = 0;
+            PlayerData.anim_frame = (PlayerData.anim_frame + 1) % 6;
+        END
+
+        IF (PlayerData.direction == 1)
+            PlayerData.sprite_graph_id = 5 + PlayerData.anim_frame;
+        ELSE
+            IF (PlayerData.direction == 2)
+                PlayerData.sprite_graph_id = 11 + PlayerData.anim_frame;
+            ELSE
+                IF (PlayerData.direction == 3)
+                    PlayerData.sprite_graph_id = 17 + PlayerData.anim_frame;
+                ELSE
+                    PlayerData.sprite_graph_id = 23 + PlayerData.anim_frame;
+                END
+            END
+        END
+    ELSE
+        PlayerData.anim_frame = 0;
+        PlayerData.anim_counter = 0;
+
+        IF (PlayerData.direction == 1)
+            PlayerData.sprite_graph_id = 1;
+        ELSE
+            IF (PlayerData.direction == 2)
+                PlayerData.sprite_graph_id = 2;
+            ELSE
+                IF (PlayerData.direction == 3)
+                    PlayerData.sprite_graph_id = 3;
+                ELSE
+                    PlayerData.sprite_graph_id = 4;
+                END
+            END
+        END
+    END
+END
+
+// Handles player interactions with NPCs and menus
+FUNCTION handle_interactions(INT closest_npc_offset, INT enter_pressed_offset, INT inventory_close_timer_offset)
+PRIVATE
+    temp_dist;
+    min_dist;
+    i;
+    npc_id;
+    STRING dialogue_text;
+BEGIN
+    // Calculate distances for interaction
+    *closest_npc_offset = -1;
+    min_dist = 51;
+    i = 0;
+    WHILE (i < MapData[current_map].npc_count)
+        temp_dist = sqrt((PlayerData.x - MapData[current_map].NPCData[i].x) * (PlayerData.x - MapData[current_map].NPCData[i].x) + (PlayerData.y - MapData[current_map].NPCData[i].y) * (PlayerData.y - MapData[current_map].NPCData[i].y));
+        IF (temp_dist < 50 AND temp_dist < min_dist)
+            *closest_npc_offset = i;
+            min_dist = temp_dist;
+        END
+        i++;
+    END
+
+    // Check interaction with NPCs
+    IF (KEY(Controls.talk))
+        IF (*enter_pressed_offset == 0 AND *closest_npc_offset != -1 AND inventory_active == 0 AND *inventory_close_timer_offset == 0 AND in_battle == 0)
+            IF (DialogState.press_timer == 0)
+                DialogState.press_timer = ScreenConfig.fps / 2;
+                IF (DialogState.process_id == 0)
+                    npc_id = MapData[current_map].NPCData[*closest_npc_offset].npc_id;
+
+                    // Check if NPC has a quest
+                    IF (MapData[current_map].NPCData[*closest_npc_offset].has_quest == 1)
+                        // Quest NPC - determine dialogue based on quest state
+                        IF (quest_states[npc_id] == QUEST_NOT_STARTED)
+                            // Offer quest
+                            i = 0;
+                            WHILE (i < MapData[current_map].NPCData[*closest_npc_offset].quest_dialogue_count)
+                                temp_dialogues[i].dialogue = MapData[current_map].NPCData[*closest_npc_offset].quest_dialogues[i].dialogue;
+                                temp_dialogues[i].cg_id = MapData[current_map].NPCData[*closest_npc_offset].quest_dialogues[i].cg_id;
+                                i++;
+                            END
+                            temp_dialogue_count = MapData[current_map].NPCData[*closest_npc_offset].quest_dialogue_count;
+                            DialogState.process_id = dialogue(MapData[current_map].NPCData[*closest_npc_offset].name, 1, 0);
+                            DialogState.is_quest = 1;
+                            DialogState.quest_npc_id = npc_id;
+                            DialogState.current_npc_index = *closest_npc_offset;
+                            DialogState.current_map_index = current_map;
+                        ELSE
+                            IF (quest_states[npc_id] == QUEST_ACTIVE)
+                                // Check if quest can be completed
+                                IF (HasItems(MapData[current_map].NPCData[*closest_npc_offset].quest_item_id, MapData[current_map].NPCData[*closest_npc_offset].quest_item_count))
+                                    // Can complete quest
+                                    i = 0;
+                                    WHILE (i < MapData[current_map].NPCData[*closest_npc_offset].quest_complete_count)
+                                        temp_dialogues[i].dialogue = MapData[current_map].NPCData[*closest_npc_offset].quest_complete_texts[i].text;
+                                        temp_dialogues[i].cg_id = MapData[current_map].NPCData[*closest_npc_offset].quest_complete_texts[i].cg_id;
+                                        i++;
+                                    END
+                                    temp_dialogue_count = MapData[current_map].NPCData[*closest_npc_offset].quest_complete_count;
+                                    DialogState.process_id = dialogue(MapData[current_map].NPCData[*closest_npc_offset].name, 0, 0);
+                                    // Complete quest
+                                    RemoveItems(MapData[current_map].NPCData[*closest_npc_offset].quest_item_id, MapData[current_map].NPCData[*closest_npc_offset].quest_item_count);
+                                    player_gold = player_gold + MapData[current_map].NPCData[*closest_npc_offset].quest_gold_reward;
+                                    quest_states[npc_id] = QUEST_COMPLETED;
+                                ELSE
+                                    // Quest in progress
+                                    i = 0;
+                                    WHILE (i < MapData[current_map].NPCData[*closest_npc_offset].quest_progress_count)
+                                        temp_dialogues[i].dialogue = MapData[current_map].NPCData[*closest_npc_offset].quest_progress_texts[i].text;
+                                        temp_dialogues[i].cg_id = MapData[current_map].NPCData[*closest_npc_offset].quest_progress_texts[i].cg_id;
+                                        i++;
+                                    END
+                                    temp_dialogue_count = MapData[current_map].NPCData[*closest_npc_offset].quest_progress_count;
+                                    DialogState.process_id = dialogue(MapData[current_map].NPCData[*closest_npc_offset].name, 0, 0);
+                                END
+                            ELSE
+                                // Quest completed
+                                i = 0;
+                                WHILE (i < MapData[current_map].NPCData[*closest_npc_offset].quest_reward_count)
+                                    temp_dialogues[i].dialogue = MapData[current_map].NPCData[*closest_npc_offset].quest_reward_texts[i].text;
+                                    temp_dialogues[i].cg_id = MapData[current_map].NPCData[*closest_npc_offset].quest_reward_texts[i].cg_id;
+                                    i++;
+                                END
+                                temp_dialogue_count = MapData[current_map].NPCData[*closest_npc_offset].quest_reward_count;
+                                DialogState.process_id = dialogue(MapData[current_map].NPCData[*closest_npc_offset].name, 0, 0);
+                            END
+                        END
+                    ELSE
+                        // Regular NPC dialogue - copy to temp storage
+                        i = 0;
+                        WHILE (i < MapData[current_map].NPCData[*closest_npc_offset].dialogue_count)
+                            temp_dialogues[i].dialogue = MapData[current_map].NPCData[*closest_npc_offset].dialogues[i].dialogue;
+                            temp_dialogues[i].cg_id = MapData[current_map].NPCData[*closest_npc_offset].dialogues[i].cg_id;
+                            i++;
+                        END
+                        temp_dialogue_count = MapData[current_map].NPCData[*closest_npc_offset].dialogue_count;
+                        DialogState.process_id = dialogue(MapData[current_map].NPCData[*closest_npc_offset].name, MapData[current_map].NPCData[*closest_npc_offset].gives_item, MapData[current_map].NPCData[*closest_npc_offset].item_id);
+                    END
+                END
+            END
+            *enter_pressed_offset = 1;
+        END
+    ELSE
+        *enter_pressed_offset = 0;
+    END
+
+    // Decrement timers
+    IF (DialogState.press_timer > 0)
+        DialogState.press_timer--;
+    END
+    IF ((*inventory_close_timer_offset) > 0)
+        (*inventory_close_timer_offset)--;
+    END
 END
 
 // Displays HUD information (gold count).
@@ -526,7 +849,7 @@ END
 // Central rendering process.
 PROCESS map_drawer()
 PRIVATE
-    i, j, color, x1, y1, x2, y2;
+    tile_i, tile_j, npc_index, color, x1, y1, x2, y2;
     dist_x, dist_y;
     i_min, i_max, j_min, j_max;
     map_width, map_height;
@@ -561,31 +884,31 @@ BEGIN
             map_height = MapData[current_map].tilesY;
 
             // Visible tile range
-            IF (((-offset_x + 31) / 32) - 1 > 0) i_min = ((-offset_x + 31) / 32) - 1; ELSE i_min = 0; END
-            IF (map_width - 1 < ((ScreenConfig.width - offset_x) / 32) + 1) i_max = map_width - 1; ELSE i_max = ((ScreenConfig.width - offset_x) / 32) + 1; END
-            IF (((-offset_y + 31) / 32) - 1 > 0) j_min = ((-offset_y + 31) / 32) - 1; ELSE j_min = 0; END
-            IF (map_height - 1 < ((ScreenConfig.height - offset_y) / 32) + 1) j_max = map_height - 1; ELSE j_max = ((ScreenConfig.height - offset_y) / 32) + 1; END
+            IF (((-offset_x + 31) / TILE_SIZE) - 1 > 0) i_min = ((-offset_x + 31) / TILE_SIZE) - 1; ELSE i_min = 0; END
+            IF (map_width - 1 < ((ScreenConfig.width - offset_x) / TILE_SIZE) + 1) i_max = map_width - 1; ELSE i_max = ((ScreenConfig.width - offset_x) / TILE_SIZE) + 1; END
+            IF (((-offset_y + 31) / TILE_SIZE) - 1 > 0) j_min = ((-offset_y + 31) / TILE_SIZE) - 1; ELSE j_min = 0; END
+            IF (map_height - 1 < ((ScreenConfig.height - offset_y) / TILE_SIZE) + 1) j_max = map_height - 1; ELSE j_max = ((ScreenConfig.height - offset_y) / TILE_SIZE) + 1; END
 
             // Apply zoom effect during dialogues
 
-            i = i_min;
-            WHILE (i <= i_max)
-                j = j_min;
-                WHILE (j <= j_max)
-                    x1 = i * 32 + offset_x;
-                    y1 = j * 32 + offset_y;
+            tile_i = i_min;
+            WHILE (tile_i <= i_max)
+                tile_j = j_min;
+                WHILE (tile_j <= j_max)
+                    x1 = tile_i * TILE_SIZE + offset_x;
+                    y1 = tile_j * TILE_SIZE + offset_y;
 
                     // Apply zoom transformation centered on player (screen center)
                     x1 = ScreenConfig.width / 2 + ((x1 - ScreenConfig.width / 2) * dialogue_zoom) / 100;
                     y1 = ScreenConfig.height / 2 + ((y1 - ScreenConfig.height / 2) * dialogue_zoom) / 100;
 
                     // Get tile code
-                    tile_code = MapData[current_map].tiles[i,j];
+                    tile_code = MapData[current_map].tiles[tile_i,tile_j];
                     // Draw sprite with zoom - xput handles the scaling
                     xput(fpg_ids[current_map], tile_code, x1 + 16, y1 + 16, 0, dialogue_zoom, 0, 0);
-                    j++;
+                    tile_j++;
                 END
-                i++;
+                tile_i++;
             END
 
             // Update previous values
@@ -596,11 +919,11 @@ BEGIN
 
             // Draw NPCs (only if not in battle)
             IF (in_battle == 0)
-                i = 0;
-                WHILE (i < MapData[current_map].npc_count)
+                npc_index = 0;
+                WHILE (npc_index < MapData[current_map].npc_count)
                     // Calculate screen position
-                    x1 = MapData[current_map].NPCData[i].x + offset_x;
-                    y1 = MapData[current_map].NPCData[i].y + offset_y;
+                    x1 = MapData[current_map].NPCData[npc_index].x + offset_x;
+                    y1 = MapData[current_map].NPCData[npc_index].y + offset_y;
 
                     // Apply zoom transformation centered on player (screen center)
                     x1 = ScreenConfig.width / 2 + ((x1 - ScreenConfig.width / 2) * dialogue_zoom) / 100;
@@ -609,28 +932,28 @@ BEGIN
                     // Check if visible on screen
                     IF (x1 + 16 > 0 AND x1 - 16 < ScreenConfig.width AND y1 + 16 > 0 AND y1 - 16 < ScreenConfig.height)
                         // Update NPC direction to face player
-                        dist_x = abs(PlayerData.x - MapData[current_map].NPCData[i].x);
-                        dist_y = abs(PlayerData.y - MapData[current_map].NPCData[i].y);
+                        dist_x = abs(PlayerData.x - MapData[current_map].NPCData[npc_index].x);
+                        dist_y = abs(PlayerData.y - MapData[current_map].NPCData[npc_index].y);
 
                         IF (dist_x > dist_y)
-                            IF (PlayerData.x > MapData[current_map].NPCData[i].x)
-                                MapData[current_map].NPCData[i].graph = 2; // Look right
+                            IF (PlayerData.x > MapData[current_map].NPCData[npc_index].x)
+                                MapData[current_map].NPCData[npc_index].sprite_graph_id = 2; // Look right
                             ELSE
-                                MapData[current_map].NPCData[i].graph = 4; // Look left
+                                MapData[current_map].NPCData[npc_index].sprite_graph_id = 4; // Look left
                             END
                         ELSE
-                            IF (PlayerData.y < MapData[current_map].NPCData[i].y)
-                                MapData[current_map].NPCData[i].graph = 1; // Look up
+                            IF (PlayerData.y < MapData[current_map].NPCData[npc_index].y)
+                                MapData[current_map].NPCData[npc_index].sprite_graph_id = 1; // Look up
                             ELSE
-                                MapData[current_map].NPCData[i].graph = 3; // Look down
+                                MapData[current_map].NPCData[npc_index].sprite_graph_id = 3; // Look down
                             END
                         END
                         // Draw NPC shadow
                         xput(hud_fpg_id, 3, x1, y1, 0, dialogue_zoom, 4, 0);
                         // Draw NPC sprite
-                        xput(npc_fpg_ids[MapData[current_map].NPCData[i].npc_id], MapData[current_map].NPCData[i].graph, x1, y1 - 24, 0, dialogue_zoom, 0, 0);
+                        xput(npc_fpg_ids[MapData[current_map].NPCData[npc_index].npc_id], MapData[current_map].NPCData[npc_index].sprite_graph_id, x1, y1 - 24, 0, dialogue_zoom, 0, 0);
                     END
-                    i++;
+                    npc_index++;
                 END
             END
 
@@ -639,7 +962,7 @@ BEGIN
                 // Draw player shadow
                 xput(hud_fpg_id, 3, ScreenConfig.width / 2, ScreenConfig.height / 2, 0, dialogue_zoom, 4, 0);
                 // Draw player sprite
-                xput(player_fpg_id, PlayerData.graph, ScreenConfig.width / 2, ScreenConfig.height / 2 - 24, 0, dialogue_zoom, 0, 0);
+                xput(player_fpg_id, PlayerData.sprite_graph_id, ScreenConfig.width / 2, ScreenConfig.height / 2 - 24, 0, dialogue_zoom, 0, 0);
             END
         END
 
@@ -674,140 +997,9 @@ BEGIN
         IF (in_battle == 1 AND after_battle_start == 1)
         END
 
-        moving = 0;
-        new_direction = PlayerData.direction;
+        handle_movement(OFFSET(moving), OFFSET(new_direction), OFFSET(speed));
 
-        // Calculate current tile and speed
-        tile_i = PlayerData.x / 32;
-        tile_j = PlayerData.y / 32;
-        IF (current_map == 0)
-            speed = 5;
-            IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
-                IF (MapData[current_map].tiles[tile_i, tile_j] == TileTypes.forest OR MapData[current_map].tiles[tile_i, tile_j] == TileTypes.mountain)
-                    speed = 2;
-                END
-            END
-        ELSE
-            speed = 5;
-        END
-
-        // Movement
-        IF (DialogState.process_id == 0 AND inventory_active == 0 AND in_battle == 0)
-            IF (KEY(Controls.left))
-                new_x = PlayerData.x - speed;
-                tile_i = new_x / 32;
-                tile_j = PlayerData.y / 32;
-                IF (current_map == 0)
-                    IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
-                        IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
-                            PlayerData.x = new_x;
-                            moving = 1;
-                            new_direction = 4;
-                        END
-                    END
-                ELSE
-                    PlayerData.x = new_x;
-                    moving = 1;
-                    new_direction = 4;
-                END
-            END
-            IF (KEY(Controls.right))
-                new_x = PlayerData.x + speed;
-                tile_i = new_x / 32;
-                tile_j = PlayerData.y / 32;
-                IF (current_map == 0)
-                    IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
-                        IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
-                            PlayerData.x = new_x;
-                            moving = 1;
-                            new_direction = 2;
-                        END
-                    END
-                ELSE
-                    PlayerData.x = new_x;
-                    moving = 1;
-                    new_direction = 2;
-                END
-            END
-            IF (KEY(Controls.up))
-                new_y = PlayerData.y - speed;
-                tile_i = PlayerData.x / 32;
-                tile_j = new_y / 32;
-                IF (current_map == 0)
-                    IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
-                        IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
-                            PlayerData.y = new_y;
-                            moving = 1;
-                            new_direction = 1;
-                        END
-                    END
-                ELSE
-                    PlayerData.y = new_y;
-                    moving = 1;
-                    new_direction = 1;
-                END
-            END
-            IF (KEY(Controls.down))
-                new_y = PlayerData.y + speed;
-                tile_i = PlayerData.x / 32;
-                tile_j = new_y / 32;
-                IF (current_map == 0)
-                    IF (tile_i >= 0 AND tile_i < MapData[current_map].tilesX AND tile_j >= 0 AND tile_j < MapData[current_map].tilesY)
-                        IF (MapData[current_map].tiles[tile_i, tile_j] != TileTypes.river)
-                            PlayerData.y = new_y;
-                            moving = 1;
-                            new_direction = 3;
-                        END
-                    END
-                ELSE
-                    PlayerData.y = new_y;
-                    moving = 1;
-                    new_direction = 3;
-                END
-            END
-        END
-
-        // Update player animation
-        PlayerData.direction = new_direction;
-
-        IF (moving)
-            PlayerData.anim_counter++;
-            IF (PlayerData.anim_counter >= 5)
-                PlayerData.anim_counter = 0;
-                PlayerData.anim_frame = (PlayerData.anim_frame + 1) % 6;
-            END
-
-            IF (PlayerData.direction == 1)
-                PlayerData.graph = 5 + PlayerData.anim_frame;
-            ELSE
-                IF (PlayerData.direction == 2)
-                    PlayerData.graph = 11 + PlayerData.anim_frame;
-                ELSE
-                    IF (PlayerData.direction == 3)
-                        PlayerData.graph = 17 + PlayerData.anim_frame;
-                    ELSE
-                        PlayerData.graph = 23 + PlayerData.anim_frame;
-                    END
-                END
-            END
-        ELSE
-            PlayerData.anim_frame = 0;
-            PlayerData.anim_counter = 0;
-
-            IF (PlayerData.direction == 1)
-                PlayerData.graph = 1;
-            ELSE
-                IF (PlayerData.direction == 2)
-                    PlayerData.graph = 2;
-                ELSE
-                    IF (PlayerData.direction == 3)
-                        PlayerData.graph = 3;
-                    ELSE
-                        PlayerData.graph = 4;
-                    END
-                END
-            END
-        END
+        handle_animations(moving, new_direction);
 
         // Random encounters on world map
         IF (moving AND current_map == 0 AND in_battle == 0)
@@ -911,110 +1103,7 @@ BEGIN
         x = PlayerData.x;
         y = PlayerData.y;
 
-        // Calculate distances for interaction
-        closest_npc = -1;
-        min_dist = 51;
-        i = 0;
-        WHILE (i < MapData[current_map].npc_count)
-            temp_dist = sqrt((PlayerData.x - MapData[current_map].NPCData[i].x) * (PlayerData.x - MapData[current_map].NPCData[i].x) + (PlayerData.y - MapData[current_map].NPCData[i].y) * (PlayerData.y - MapData[current_map].NPCData[i].y));
-            IF (temp_dist < 50 AND temp_dist < min_dist)
-                closest_npc = i;
-                min_dist = temp_dist;
-            END
-            i++;
-        END
-
-        // Check interaction with NPCs
-        IF (KEY(Controls.talk))
-            IF (enter_pressed == 0 AND closest_npc != -1 AND inventory_active == 0 AND inventory_close_timer == 0 AND in_battle == 0)
-                IF (DialogState.press_timer == 0)
-                    DialogState.press_timer = ScreenConfig.fps / 2;
-                    IF (DialogState.process_id == 0)
-                        npc_id = MapData[current_map].NPCData[closest_npc].npc_id;
-
-                        // Check if NPC has a quest
-                        IF (MapData[current_map].NPCData[closest_npc].has_quest == 1)
-                            // Quest NPC - determine dialogue based on quest state
-                            IF (quest_states[npc_id] == QUEST_NOT_STARTED)
-                                // Offer quest
-                                i = 0;
-                                WHILE (i < MapData[current_map].NPCData[closest_npc].quest_dialogue_count)
-                                    temp_dialogues[i].dialogue = MapData[current_map].NPCData[closest_npc].quest_dialogues[i].dialogue;
-                                    temp_dialogues[i].cg_id = MapData[current_map].NPCData[closest_npc].quest_dialogues[i].cg_id;
-                                    i++;
-                                END
-                                temp_dialogue_count = MapData[current_map].NPCData[closest_npc].quest_dialogue_count;
-                                DialogState.process_id = dialogue(MapData[current_map].NPCData[closest_npc].name, 1, 0);
-                                DialogState.is_quest = 1;
-                                DialogState.quest_npc_id = npc_id;
-                                DialogState.current_npc_index = closest_npc;
-                                DialogState.current_map_index = current_map;
-                            ELSE
-                                IF (quest_states[npc_id] == QUEST_ACTIVE)
-                                    // Check if quest can be completed
-                                    IF (HasItems(MapData[current_map].NPCData[closest_npc].quest_item_id, MapData[current_map].NPCData[closest_npc].quest_item_count))
-                                        // Can complete quest
-                                        i = 0;
-                                        WHILE (i < MapData[current_map].NPCData[closest_npc].quest_complete_count)
-                                            temp_dialogues[i].dialogue = MapData[current_map].NPCData[closest_npc].quest_complete_texts[i].text;
-                                            temp_dialogues[i].cg_id = MapData[current_map].NPCData[closest_npc].quest_complete_texts[i].cg_id;
-                                            i++;
-                                        END
-                                        temp_dialogue_count = MapData[current_map].NPCData[closest_npc].quest_complete_count;
-                                        DialogState.process_id = dialogue(MapData[current_map].NPCData[closest_npc].name, 0, 0);
-                                        // Complete quest
-                                        RemoveItems(MapData[current_map].NPCData[closest_npc].quest_item_id, MapData[current_map].NPCData[closest_npc].quest_item_count);
-                                        player_gold = player_gold + MapData[current_map].NPCData[closest_npc].quest_gold_reward;
-                                        quest_states[npc_id] = QUEST_COMPLETED;
-                                    ELSE
-                                        // Quest in progress
-                                        i = 0;
-                                        WHILE (i < MapData[current_map].NPCData[closest_npc].quest_progress_count)
-                                            temp_dialogues[i].dialogue = MapData[current_map].NPCData[closest_npc].quest_progress_texts[i].text;
-                                            temp_dialogues[i].cg_id = MapData[current_map].NPCData[closest_npc].quest_progress_texts[i].cg_id;
-                                            i++;
-                                        END
-                                        temp_dialogue_count = MapData[current_map].NPCData[closest_npc].quest_progress_count;
-                                        DialogState.process_id = dialogue(MapData[current_map].NPCData[closest_npc].name, 0, 0);
-                                    END
-                                ELSE
-                                    // Quest completed
-                                    i = 0;
-                                    WHILE (i < MapData[current_map].NPCData[closest_npc].quest_reward_count)
-                                        temp_dialogues[i].dialogue = MapData[current_map].NPCData[closest_npc].quest_reward_texts[i].text;
-                                        temp_dialogues[i].cg_id = MapData[current_map].NPCData[closest_npc].quest_reward_texts[i].cg_id;
-                                        i++;
-                                    END
-                                    temp_dialogue_count = MapData[current_map].NPCData[closest_npc].quest_reward_count;
-                                    DialogState.process_id = dialogue(MapData[current_map].NPCData[closest_npc].name, 0, 0);
-                                END
-                            END
-                        ELSE
-                            // Regular NPC dialogue - copy to temp storage
-                            i = 0;
-                            WHILE (i < MapData[current_map].NPCData[closest_npc].dialogue_count)
-                                temp_dialogues[i].dialogue = MapData[current_map].NPCData[closest_npc].dialogues[i].dialogue;
-                                temp_dialogues[i].cg_id = MapData[current_map].NPCData[closest_npc].dialogues[i].cg_id;
-                                i++;
-                            END
-                            temp_dialogue_count = MapData[current_map].NPCData[closest_npc].dialogue_count;
-                            DialogState.process_id = dialogue(MapData[current_map].NPCData[closest_npc].name, MapData[current_map].NPCData[closest_npc].gives_item, MapData[current_map].NPCData[closest_npc].item_id);
-                        END
-                    END
-                END
-                enter_pressed = 1;
-            END
-        ELSE
-            enter_pressed = 0;
-        END
-
-        // Decrement timers
-        IF (DialogState.press_timer > 0)
-            DialogState.press_timer--;
-        END
-        IF (inventory_close_timer > 0)
-            inventory_close_timer--;
-        END
+        handle_interactions(OFFSET(closest_npc), OFFSET(enter_pressed), OFFSET(inventory_close_timer));
 
         // Check for map transitions
         IF (current_map == 0)
@@ -1042,8 +1131,268 @@ BEGIN
     END
 END
 
+// Handles victory condition and rewards in battle
+FUNCTION handle_victory(INT num_enemies, INT battle_active_offset, INT message_text_id_offset, INT msg_timer_offset, STRING battle_msg)
+PRIVATE
+    INT enemy_alive_count;
+    INT i, j;
+    INT found;
+    INT reward_gold_total = 0;
+    INT items_gained = 0;
+BEGIN
+    // Check victory condition first
+    enemy_alive_count = 0;
+    i = 0;
+    WHILE (i < num_enemies)
+        IF (Enemies[i].alive == 1)
+            enemy_alive_count++;
+        END
+        i++;
+    END
+
+    IF (enemy_alive_count == 0 AND *battle_active_offset == 1)
+        // All enemies defeated - victory!
+        // Only give rewards once
+        reward_gold_total = 0;
+        items_gained = 0;
+        i = 0;
+        WHILE (i < num_enemies)
+            player_gold = player_gold + MonsterList[Enemies[i].monster_id].reward_gold;
+            reward_gold_total = reward_gold_total + MonsterList[Enemies[i].monster_id].reward_gold;
+
+            // Add item to inventory
+            found = -1;
+            FOR (j = 0; j < item_count; j++)
+                IF (strcmp(inventory[j].item, ItemList[MonsterList[Enemies[i].monster_id].reward_item_id].name) == 0)
+                    found = j;
+                    BREAK;
+                END
+            END
+            IF (found != -1)
+                inventory[found].quantity++;
+            ELSE
+                IF (item_count < 10)
+                    inventory[item_count].item = ItemList[MonsterList[Enemies[i].monster_id].reward_item_id].name;
+                    inventory[item_count].quantity = 1;
+                    inventory[item_count].description = ItemList[MonsterList[Enemies[i].monster_id].reward_item_id].description;
+                    item_count++;
+                END
+            END
+            items_gained++;
+            i++;
+        END
+
+        IF (*message_text_id_offset != 0)
+            delete_text(*message_text_id_offset);
+        END
+        // Clear action and enemy texts
+        FROM i=0 TO 3;
+            // Assuming ActionText and EnemyText are global or passed, but for simplicity, we'll handle in main
+        END
+        battle_msg = "VICTORY! Gained ";
+        battle_msg = battle_msg + itoa(reward_gold_total);
+        battle_msg = battle_msg + " gold and ";
+        battle_msg = battle_msg + itoa(items_gained);
+        battle_msg = battle_msg + " ";
+        battle_msg = battle_msg + ItemList[MonsterList[0].reward_item_id].name;
+        battle_msg = battle_msg + "s!";
+        *message_text_id_offset = write(0, ScreenConfig.width / 2, 175, 4, battle_msg);
+        ChangeSong("MOD/ILUETNI.XM");
+        *msg_timer_offset = seconds_to_frames(2);
+        *battle_active_offset = 0; // This prevents re-entry into this block
+        // Wait for message to finish
+        WHILE (*msg_timer_offset > 0)
+            // Draw HUD box
+            put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
+            // Draw enemies during wait
+            j = 0;
+            WHILE (j < num_enemies)
+                IF (Enemies[j].alive == 1)
+                    xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].sprite_graph_id, 80 + j * 80, 60, 0, 100, 0, 0);
+                END
+                j++;
+            END
+            FRAME;
+            (*msg_timer_offset)--;
+        END
+    END
+END
+
+// Handles battle animations (enemy drawing and dying)
+FUNCTION handle_battle_animations(INT num_enemies)
+PRIVATE
+    INT i;
+BEGIN
+    // Draw enemies
+    i = 0;
+    WHILE (i < num_enemies)
+        IF (Enemies[i].alive == 1)
+            // Handle dying animation
+            IF (Enemies[i].dying == 1)
+                Enemies[i].size = (Enemies[i].dying_timer * 100) / seconds_to_frames(1);
+                flags = 4; // transparent
+                Enemies[i].dying_timer--;
+                IF (Enemies[i].dying_timer <= 0)
+                    Enemies[i].alive = 0;
+                    Enemies[i].dying = 0;
+                END
+            ELSE
+                flags = 0;
+                Enemies[i].size = 100;
+            END
+
+            // Draw slime (centered horizontally, spaced vertically)
+            IF (selecting_target == 1 AND i == selected_target)
+                // Selected enemy: larger (120%) and transparent (flags=4), but override if dying
+                IF (Enemies[i].dying == 0)
+                    xput(monsters_fpg_id, MonsterList[Enemies[i].monster_id].sprite_graph_id, 80 + i * 80, 60, 0, 120, 4, 0);
+                ELSE
+                    xput(monsters_fpg_id, MonsterList[Enemies[i].monster_id].sprite_graph_id, 80 + i * 80, 60, 0, Enemies[i].size, flags, 0);
+                END
+            ELSE
+                // Normal enemy
+                xput(monsters_fpg_id, MonsterList[Enemies[i].monster_id].sprite_graph_id, 80 + i * 80, 60, 0, Enemies[i].size, flags, 0);
+            END
+        END
+        i++;
+    END
+END
+
+// Handles turn-based logic in battle
+FUNCTION handle_turns(INT num_enemies, INT player_turn_offset, INT battle_active_offset, INT message_text_id_offset, INT msg_timer_offset, STRING battle_msg, INT input_timer_offset)
+PRIVATE
+    INT damage;
+    INT enemy_alive_count;
+    INT enemy_action;
+    INT all_enemies_dead;
+    INT player_dead;
+    INT found;
+    INT any_dying = 0;
+    INT items_gained = 0;
+    INT mp_cost = 0;
+    INT i, j;
+BEGIN
+    // Only process turns when msg_timer is 0 and battle is still active
+    IF (*msg_timer_offset == 0 AND *battle_active_offset == 1)
+        IF (*player_turn_offset)
+            // Player's turn - Show "Your turn" message and menu
+            // This is complex, so for now, keep in main, but we can extract parts
+            // For simplicity, this function will handle the core turn logic after menu selection
+            // Assuming the menu is handled in main, and here we handle the actions
+        END
+    END
+
+    IF (*player_turn_offset == 0)
+        // Check if any enemy is dying
+        any_dying = 0;
+        i = 0;
+        WHILE (i < num_enemies)
+            IF (Enemies[i].dying == 1)
+                any_dying = 1;
+                BREAK;
+            END
+            i++;
+        END
+
+        IF (any_dying == 0)
+            // Enemy turn - attacks immediately since msg_timer == 0
+            i = 0;
+            WHILE (i < num_enemies)
+                IF (Enemies[i].alive == 1)
+                    damage = MonsterList[Enemies[i].monster_id].attack - PlayerStats.defense;
+                    IF (damage < 1)
+                        damage = 1;
+                    END
+                    PlayerStats.current_hp = PlayerStats.current_hp - damage;
+
+                    IF (*message_text_id_offset != 0)
+                        delete_text(*message_text_id_offset);
+                    END
+                    battle_msg = MonsterList[Enemies[i].monster_id].name + " attacks!";
+                    *message_text_id_offset = write(0, ScreenConfig.width / 2, 175, 4, battle_msg);
+                    *msg_timer_offset = seconds_to_frames(2);
+                    // Wait for message to finish
+                    WHILE (*msg_timer_offset > 0)
+                        // Draw HUD box
+                        put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
+                        // Draw enemies during wait
+                        j = 0;
+                        WHILE (j < num_enemies)
+                            IF (Enemies[j].alive == 1)
+                                xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].sprite_graph_id, 80 + j * 80, 60, 0, 100, 0, 0);
+                            END
+                            j++;
+                        END
+                        FRAME;
+                        (*msg_timer_offset)--;
+                    END
+                    // Then show damage message
+                    IF (*message_text_id_offset != 0)
+                        delete_text(*message_text_id_offset);
+                    END
+                    battle_msg = "You took ";
+                    battle_msg = battle_msg + itoa(damage);
+                    battle_msg = battle_msg + " damage!";
+                    *message_text_id_offset = write(0, ScreenConfig.width / 2, 175, 4, battle_msg);
+                    *msg_timer_offset = seconds_to_frames(2);
+                    // Wait again
+                    WHILE (*msg_timer_offset > 0)
+                        // Draw HUD box
+                        put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
+                        // Draw enemies during wait
+                        j = 0;
+                        WHILE (j < num_enemies)
+                            IF (Enemies[j].alive == 1)
+                                xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].sprite_graph_id, 80 + j * 80, 60, 0, 100, 0, 0);
+                            END
+                            j++;
+                        END
+                        FRAME;
+                        (*msg_timer_offset)--;
+                    END
+                    BREAK; // One enemy attacks per turn
+                END
+                i++;
+            END
+
+            IF (PlayerStats.current_hp <= 0)
+                PlayerStats.current_hp = 0;
+                IF (*message_text_id_offset != 0)
+                    delete_text(*message_text_id_offset);
+                END
+                // Clear action and enemy texts
+                j = 0;
+                WHILE (j < 3)
+                    // Assuming ActionText and EnemyText are global
+                    j++;
+                END
+                *message_text_id_offset = write(0, 50, 170, 0, "DEFEAT!");
+                *msg_timer_offset = seconds_to_frames(2);
+                // Wait for message to finish
+                WHILE (*msg_timer_offset > 0)
+                    // Draw HUD box
+                    put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
+                    // Draw enemies
+                    j = 0;
+                    WHILE (j < num_enemies)
+                        IF (Enemies[j].alive == 1)
+                            xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].sprite_graph_id, 80 + j * 80, 60, 0, 100, 0, 0);
+                        END
+                        j++;
+                    END
+                    FRAME;
+                    (*msg_timer_offset)--;
+                END
+                *battle_active_offset = 0;
+            ELSE
+                *player_turn_offset = 1;
+            END
+        END
+    END
+END
+
 // Check if player has specified number of items.
-PROCESS HasItems(INT item_id, INT count_needed)
+FUNCTION HasItems(INT item_id, INT count_needed)
 PRIVATE
     i;
 BEGIN
@@ -1062,7 +1411,7 @@ BEGIN
 END
 
 // Remove specified number of items from inventory.
-PROCESS RemoveItems(INT item_id, INT count_to_remove)
+FUNCTION RemoveItems(INT item_id, INT count_to_remove)
 PRIVATE
     i;
 BEGIN
@@ -1084,6 +1433,7 @@ BEGIN
         END
         i++;
     END
+    RETURN(0);
 END
 
 // Manages the interactive dialogue system with multiple dialogues support.
@@ -1259,13 +1609,11 @@ BEGIN
 
         // Handle options menu
         IF (showing_options)
-            i = 0;
-            WHILE (i < 2)
+            FROM i=0 TO 1;
                 IF (options_text_ids[i] != 0)
                     delete_text(options_text_ids[i]);
                     options_text_ids[i] = 0;
                 END
-                i++;
             END
 
             IF (KEY(Controls.up) AND input_timer == 0)
@@ -1278,14 +1626,12 @@ BEGIN
             END
 
             // Display options
-            i = 0;
-            WHILE (i < 2)
+            FROM i=0 TO 1;
                 IF (i == selected_option)
                     options_text_ids[i] = write(0, 240, ScreenConfig.height - 20 + i * 10, 0, OptionStrings[i].selected);
                 ELSE
                     options_text_ids[i] = write(0, 240, ScreenConfig.height - 20 + i * 10, 0, OptionStrings[i].normal);
                 END
-                i++;
             END
 
             IF (KEY(Controls.talk))
@@ -1405,13 +1751,11 @@ BEGIN
                     END
                     // Clear options for next dialogue
                     showing_options = 0;
-                    i = 0;
-                    WHILE (i < 2)
+                    FROM i=0 TO 1;
                         IF (options_text_ids[i] != 0)
                             delete_text(options_text_ids[i]);
                             options_text_ids[i] = 0;
                         END
-                        i++;
                     END
                 ELSE
                     // Last dialogue - proceed to close
@@ -1445,12 +1789,10 @@ BEGIN
                             delete_text(indicator_id);
                         END
                         IF (showing_options)
-                            i = 0;
-                            WHILE (i < 2)
+                            FROM i=0 TO 1;
                                 IF (options_text_ids[i] != 0)
                                     delete_text(options_text_ids[i]);
                                 END
-                                i++;
                             END
                         END
                         DialogState.closing = 0;
@@ -1467,7 +1809,7 @@ BEGIN
 END
 
 // Saves the current game state to save.dat file.
-PROCESS SaveGame()
+FUNCTION SaveGame()
 PRIVATE
     file_handle;
     data_size;
@@ -1477,7 +1819,7 @@ BEGIN
     file_handle = fopen("save.dat", "w");
 
     IF (file_handle == 0)
-        RETURN(0); // Error creating file
+        RETURN(-1); // Error creating file
     END
 
     // Write PlayerData
@@ -1514,7 +1856,7 @@ BEGIN
 END
 
 // Loads the game state from save.dat file.
-PROCESS LoadGame()
+FUNCTION LoadGame()
 PRIVATE
     file_handle;
     data_size;
@@ -1524,7 +1866,7 @@ BEGIN
     file_handle = fopen("save.dat", "r");
 
     IF (file_handle == 0)
-        RETURN(0); // File doesn't exist
+        RETURN(-1); // File doesn't exist
     END
 
     // Read PlayerData
@@ -1574,10 +1916,6 @@ END
 PROCESS inventory_screen()
 PRIVATE
     bg_id = 0, title_id = 0;
-    STRUCT MenuOption[8]
-        STRING text;
-        INT text_id;
-    END
     INT selected = 0;
     INT i;
     INT input_timer = 0;
@@ -1588,7 +1926,7 @@ PRIVATE
     INT in_submenu = 0;
     INT save_result = 0;
     INT load_result = 0;
-    INT msg_id = 0;
+    INT message_text_id = 0;
     INT msg_timer = 0;
 BEGIN
     inventory_active = 1;
@@ -1609,43 +1947,29 @@ BEGIN
         END
 
         // Clear previous menu options
-        i = 0;
-        WHILE (i < 8)
-            IF (MenuOption[i].text_id != 0)
-                delete_text(MenuOption[i].text_id);
-                MenuOption[i].text_id = 0;
-            END
-            i++;
-        END
+        clear_menu(8);
 
         // Display save/load messages if any
         IF (msg_timer > 0)
             msg_timer--;
-            IF (msg_timer == 0 AND msg_id != 0)
-                delete_text(msg_id);
-                msg_id = 0;
+            IF (msg_timer == 0 AND message_text_id != 0)
+                delete_text(message_text_id);
+                message_text_id = 0;
             END
         END
 
-        IF (KEY(Controls.up) AND input_timer == 0 AND in_submenu == 0)
-            selected = (selected - 1 + 8) % 8;
-            input_timer = 5;
-        END
-        IF (KEY(Controls.down) AND input_timer == 0 AND in_submenu == 0)
-            selected = (selected + 1) % 8;
-            input_timer = 5;
+        IF (in_submenu == 0)
+            navigate_menu(OFFSET(selected), 8, OFFSET(input_timer));
         END
         IF (KEY(Controls.talk) AND input_timer == 0 AND in_submenu == 0)
             IF (selected == 0)
                 // Stats
                 in_submenu = 1;
                 delete_text(title_id);
-                i = 0;
-                WHILE (i < 8)
+                FROM i=0 TO 7;
                     IF (MenuOption[i].text_id != 0)
                         delete_text(MenuOption[i].text_id);
                     END
-                    i++;
                 END
                 submenu_finished = 0;
                 stats_screen();
@@ -1664,12 +1988,10 @@ BEGIN
                     // Quests
                     in_submenu = 1;
                     delete_text(title_id);
-                    i = 0;
-                    WHILE (i < 8)
+                    FROM i=0 TO 7;
                         IF (MenuOption[i].text_id != 0)
                             delete_text(MenuOption[i].text_id);
                         END
-                        i++;
                     END
                     submenu_finished = 0;
                     quests_screen();
@@ -1687,12 +2009,10 @@ BEGIN
                     IF (selected == 2)
                         // Items
                         delete_text(title_id);
-                        i = 0;
-                        WHILE (i < 8)
+                        FROM i=0 TO 7;
                             IF (MenuOption[i].text_id != 0)
                                 delete_text(MenuOption[i].text_id);
                             END
-                            i++;
                         END
                         submenu_finished = 0;
                         items_screen();
@@ -1710,12 +2030,10 @@ BEGIN
                         IF (selected == 3)
                             // CG Gallery
                             delete_text(title_id);
-                            i = 0;
-                            WHILE (i < 8)
+                            FROM i=0 TO 7;
                                 IF (MenuOption[i].text_id != 0)
                                     delete_text(MenuOption[i].text_id);
                                 END
-                                i++;
                             END
                             submenu_finished = 0;
                             cg_gallery_screen();
@@ -1733,13 +2051,13 @@ BEGIN
                             IF (selected == 4)
                                 // Save Game
                                 save_result = SaveGame();
-                                IF (msg_id != 0)
-                                    delete_text(msg_id);
+                                IF (message_text_id != 0)
+                                    delete_text(message_text_id);
                                 END
                                 IF (save_result == 1)
-                                    msg_id = write(0, ScreenConfig.width / 2, 180, 4, "Game saved successfully!");
+                                    message_text_id = write(0, ScreenConfig.width / 2, 180, 4, "Game saved successfully!");
                                 ELSE
-                                    msg_id = write(0, ScreenConfig.width / 2, 180, 4, "Error saving game!");
+                                    message_text_id = write(0, ScreenConfig.width / 2, 180, 4, "Error saving game!");
                                 END
                                 msg_timer = ScreenConfig.fps * 2;
                                 input_timer = 10;
@@ -1747,15 +2065,15 @@ BEGIN
                                 IF (selected == 5)
                                     // Load Game
                                     load_result = LoadGame();
-                                    IF (msg_id != 0)
-                                        delete_text(msg_id);
+                                    IF (message_text_id != 0)
+                                        delete_text(message_text_id);
                                     END
                                     IF (load_result == 1)
-                                        msg_id = write(0, ScreenConfig.width / 2, 180, 4, "Game loaded successfully!");
+                                        message_text_id = write(0, ScreenConfig.width / 2, 180, 4, "Game loaded successfully!");
                                         msg_timer = ScreenConfig.fps * 2;
                                         input_timer = 10;
                                     ELSE
-                                        msg_id = write(0, ScreenConfig.width / 2, 180, 4, "No save file found!");
+                                        message_text_id = write(0, ScreenConfig.width / 2, 180, 4, "No save file found!");
                                         msg_timer = ScreenConfig.fps * 2;
                                         input_timer = 10;
                                     END
@@ -1827,30 +2145,17 @@ BEGIN
                 MenuOption[7].text = "  Exit Game";
             END
 
-            MenuOption[0].text_id = write(0, ScreenConfig.width / 2, 30, 4, MenuOption[0].text);
-            MenuOption[1].text_id = write(0, ScreenConfig.width / 2, 45, 4, MenuOption[1].text);
-            MenuOption[2].text_id = write(0, ScreenConfig.width / 2, 60, 4, MenuOption[2].text);
-            MenuOption[3].text_id = write(0, ScreenConfig.width / 2, 75, 4, MenuOption[3].text);
-            MenuOption[4].text_id = write(0, ScreenConfig.width / 2, 90, 4, MenuOption[4].text);
-            MenuOption[5].text_id = write(0, ScreenConfig.width / 2, 105, 4, MenuOption[5].text);
-            MenuOption[6].text_id = write(0, ScreenConfig.width / 2, 120, 4, MenuOption[6].text);
-            MenuOption[7].text_id = write(0, ScreenConfig.width / 2, 135, 4, MenuOption[7].text);
+            render_menu(8, ScreenConfig.width / 2, 30, 15);
         END
 
         FRAME;
     END
 
     delete_text(title_id);
-    IF (msg_id != 0)
-        delete_text(msg_id);
+    IF (message_text_id != 0)
+        delete_text(message_text_id);
     END
-    i = 0;
-    WHILE (i < 8)
-        IF (MenuOption[i].text_id != 0)
-            delete_text(MenuOption[i].text_id);
-        END
-        i++;
-    END
+    clear_menu(8);
     inventory_active = 0;
 
     IF (do_exit_game)
@@ -1863,11 +2168,6 @@ END
 PROCESS quests_screen()
 PRIVATE
     title_id = 0;
-    STRUCT MenuOption[12]
-        STRING text;
-        INT text_id;
-        INT desc_id;
-    END
     INT menu_count = 0;
     INT selected = 0;
     INT i, j;
@@ -1899,9 +2199,7 @@ BEGIN
     menu_count = active_quests + 1; // +1 for Back option
 
     // Wait for key release
-    WHILE (KEY(Controls.up) OR KEY(Controls.down) OR KEY(Controls.talk) OR KEY(Controls.inventory))
-        FRAME;
-    END
+    wait_for_key_release();
 
     LOOP
         IF (input_timer > 0)
@@ -1912,8 +2210,7 @@ BEGIN
         END
 
         // Clear previous menu options
-        i = 0;
-        WHILE (i < 12)
+        FROM i=0 TO 11;
             IF (MenuOption[i].text_id != 0)
                 delete_text(MenuOption[i].text_id);
                 MenuOption[i].text_id = 0;
@@ -1922,17 +2219,9 @@ BEGIN
                 delete_text(MenuOption[i].desc_id);
                 MenuOption[i].desc_id = 0;
             END
-            i++;
         END
 
-        IF (KEY(Controls.up) AND input_timer == 0)
-            selected = (selected - 1 + menu_count) % menu_count;
-            input_timer = 5;
-        END
-        IF (KEY(Controls.down) AND input_timer == 0)
-            selected = (selected + 1) % menu_count;
-            input_timer = 5;
-        END
+        navigate_menu(OFFSET(selected), menu_count, OFFSET(input_timer));
         IF (KEY(Controls.talk) AND input_timer == 0)
             IF (selected == active_quests)
                 exit_screen = 1;
@@ -1992,15 +2281,13 @@ BEGIN
     END
 
     delete_text(title_id);
-    i = 0;
-    WHILE (i < 12)
+    FROM i=0 TO 11;
         IF (MenuOption[i].text_id != 0)
             delete_text(MenuOption[i].text_id);
         END
         IF (MenuOption[i].desc_id != 0)
             delete_text(MenuOption[i].desc_id);
         END
-        i++;
     END
     submenu_finished = 1;
 END
@@ -2009,11 +2296,6 @@ END
 PROCESS items_screen()
 PRIVATE
     title_id = 0;
-    STRUCT MenuOption[12]
-        STRING text;
-        INT text_id;
-        INT desc_id;
-    END
     INT menu_count;
     INT selected = 0;
     INT i;
@@ -2038,9 +2320,7 @@ BEGIN
     title_id = write(0, ScreenConfig.width / 2, 10, 4, "Items");
 
     // Wait for key release
-    WHILE (KEY(Controls.up) OR KEY(Controls.down) OR KEY(Controls.talk) OR KEY(Controls.inventory))
-        FRAME;
-    END
+    wait_for_key_release();
 
     LOOP
         IF (input_timer > 0)
@@ -2051,27 +2331,9 @@ BEGIN
         END
 
         // Clear previous menu options
-        i = 0;
-        WHILE (i < 12)
-            IF (MenuOption[i].text_id != 0)
-                delete_text(MenuOption[i].text_id);
-                MenuOption[i].text_id = 0;
-            END
-            IF (MenuOption[i].desc_id != 0)
-                delete_text(MenuOption[i].desc_id);
-                MenuOption[i].desc_id = 0;
-            END
-            i++;
-        END
+        clear_menu(12);
 
-        IF (KEY(Controls.up) AND input_timer == 0)
-            selected = (selected - 1 + menu_count) % menu_count;
-            input_timer = 5;
-        END
-        IF (KEY(Controls.down) AND input_timer == 0)
-            selected = (selected + 1) % menu_count;
-            input_timer = 5;
-        END
+        navigate_menu(OFFSET(selected), menu_count, OFFSET(input_timer));
         IF (KEY(Controls.talk) AND input_timer == 0)
             IF (selected == item_count)
                 exit_screen = 1;
@@ -2112,15 +2374,13 @@ BEGIN
     END
 
     delete_text(title_id);
-    i = 0;
-    WHILE (i < 12)
+    FROM i=0 TO 11;
         IF (MenuOption[i].text_id != 0)
             delete_text(MenuOption[i].text_id);
         END
         IF (MenuOption[i].desc_id != 0)
             delete_text(MenuOption[i].desc_id);
         END
-        i++;
     END
     submenu_finished = 1;
 END
@@ -2130,10 +2390,6 @@ END
 PROCESS cg_gallery_screen()
 PRIVATE
     title_id = 0;
-    STRUCT MenuOption[11] // Max 10 CGs + Back option
-        STRING text;
-        INT text_id;
-    END
     INT menu_count;
     INT selected = 0;
     INT i;
@@ -2154,9 +2410,7 @@ BEGIN
     title_id = write(0, ScreenConfig.width / 2, 10, 4, "CG Gallery");
 
     // Wait for key release
-    WHILE (KEY(Controls.up) OR KEY(Controls.down) OR KEY(Controls.talk) OR KEY(Controls.inventory))
-        FRAME;
-    END
+    wait_for_key_release();
 
     LOOP
         IF (input_timer > 0)
@@ -2169,23 +2423,9 @@ BEGIN
         IF (viewing_cg == 0)
             // Gallery menu mode
             // Clear previous menu options
-            i = 0;
-            WHILE (i < 11)
-                IF (MenuOption[i].text_id != 0)
-                    delete_text(MenuOption[i].text_id);
-                    MenuOption[i].text_id = 0;
-                END
-                i++;
-            END
+            clear_menu(11);
 
-            IF (KEY(Controls.up) AND input_timer == 0)
-                selected = (selected - 1 + menu_count) % menu_count;
-                input_timer = 5;
-            END
-            IF (KEY(Controls.down) AND input_timer == 0)
-                selected = (selected + 1) % menu_count;
-                input_timer = 5;
-            END
+            navigate_menu(OFFSET(selected), menu_count, OFFSET(input_timer));
             IF (KEY(Controls.talk) AND input_timer == 0)
                 IF (selected < cg_count)
                     // Try to view CG if unlocked
@@ -2196,10 +2436,8 @@ BEGIN
                         viewing_cg = 1;
                         current_cg = selected + 1;
                         title_id = 0;
-                        i = 0;
-                        WHILE (i < 11)
+                        FROM i=0 TO 10;
                             MenuOption[i].text_id = 0;
-                            i++;
                         END
                         fade_on();
                         input_timer = 10;
@@ -2287,12 +2525,10 @@ BEGIN
     IF (cg_text_id != 0)
         delete_text(cg_text_id);
     END
-    i = 0;
-    WHILE (i < 11)
+    FROM i=0 TO 10;
         IF (MenuOption[i].text_id != 0)
             delete_text(MenuOption[i].text_id);
         END
-        i++;
     END
     submenu_finished = 1;
 END
@@ -2320,9 +2556,7 @@ BEGIN
     title_id = write(0, ScreenConfig.width / 2, 10, 4, "Character Stats");
 
     // Wait for key release
-    WHILE (KEY(Controls.up) OR KEY(Controls.down) OR KEY(Controls.talk) OR KEY(Controls.inventory))
-        FRAME;
-    END
+    wait_for_key_release();
 
     LOOP
         IF (input_timer > 0)
@@ -2333,13 +2567,11 @@ BEGIN
         END
 
         // Clear previous stat texts
-        i = 0;
-        WHILE (i < 8)
+        FROM i=0 TO 7;
             IF (StatText[i].text_id != 0)
                 delete_text(StatText[i].text_id);
                 StatText[i].text_id = 0;
             END
-            i++;
         END
 
         IF (KEY(Controls.talk) AND input_timer == 0)
@@ -2381,12 +2613,10 @@ BEGIN
     END
 
     delete_text(title_id);
-    i = 0;
-    WHILE (i < 8)
+    FROM i=0 TO 7;
         IF (StatText[i].text_id != 0)
             delete_text(StatText[i].text_id);
         END
-        i++;
     END
     submenu_finished = 1;
 END
@@ -2395,23 +2625,14 @@ END
 PROCESS battle_screen()
 PRIVATE
     INT num_enemies;
-    STRUCT Enemies[3]
-        INT monster_id;
-        INT current_hp;
-        INT max_hp;
-        INT alive;
-        INT dying;
-        INT dying_timer;
-        INT size;
-    END
     INT selected_action = 0;
-    INT selected_target = 0;
     INT i, j;
     INT input_timer = 0;
     INT battle_active = 1;
     INT player_turn = 1;
-    INT msg_id = 0;
+    INT message_text_id = 0;
     INT msg_timer = 0;
+    INT msg_id = 0;
     INT hp_mp_id = 0; // ID for HP/MP display
     STRUCT ActionText[4]
         STRING text;
@@ -2428,10 +2649,9 @@ PRIVATE
     INT player_dead;
     INT found;
     INT reward_gold_total = 0;
-    STRING battle_msg;
-    STRING hp_mp_msg;
+    STRING battle_msg[200];
+    STRING hp_mp_msg[50];
     INT battle_msg_id = 0;
-    INT selecting_target = 0; // 1 = selecting target for attack
     INT selecting_magic = 0; // 1 = selecting magic
     INT selected_magic = 0; // 0-2 = spells, 3 = Back
     INT casting_spell = -1; // -1 = none, 0-2 = spell being cast
@@ -2471,7 +2691,7 @@ BEGIN
 
     // Wait for key release and show start message
     i = 0;
-    WHILE (i < estimatedSeconds(2) OR KEY(Controls.talk) OR KEY(Controls.inventory))
+    WHILE (i < seconds_to_frames(2) OR KEY(Controls.talk) OR KEY(Controls.inventory))
         // Draw dialogue box
         put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
         FRAME;
@@ -2491,46 +2711,13 @@ BEGIN
             input_timer--;
         END
 
-        // Draw enemies
-        i = 0;
-        WHILE (i < num_enemies)
-            IF (Enemies[i].alive == 1)
-                // Handle dying animation
-                IF (Enemies[i].dying == 1)
-                    Enemies[i].size = (Enemies[i].dying_timer * 100) / estimatedSeconds(1);
-                    flags = 4; // transparent
-                    Enemies[i].dying_timer--;
-                    IF (Enemies[i].dying_timer <= 0)
-                        Enemies[i].alive = 0;
-                        Enemies[i].dying = 0;
-                    END
-                ELSE
-                    flags = 0;
-                    Enemies[i].size = 100;
-                END
-
-                // Draw slime (centered horizontally, spaced vertically)
-                IF (selecting_target == 1 AND i == selected_target)
-                    // Selected enemy: larger (120%) and transparent (flags=4), but override if dying
-                    IF (Enemies[i].dying == 0)
-                        xput(monsters_fpg_id, MonsterList[Enemies[i].monster_id].graph, 80 + i * 80, 60, 0, 120, 4, 0);
-                    ELSE
-                        xput(monsters_fpg_id, MonsterList[Enemies[i].monster_id].graph, 80 + i * 80, 60, 0, Enemies[i].size, flags, 0);
-                    END
-                ELSE
-                    // Normal enemy
-                    xput(monsters_fpg_id, MonsterList[Enemies[i].monster_id].graph, 80 + i * 80, 60, 0, Enemies[i].size, flags, 0);
-                END
-            END
-            i++;
-        END
+        handle_battle_animations(num_enemies);
 
         // Draw battle box
         put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
 
         // Clear previous texts
-        i = 0;
-        WHILE (i < 4)
+        FROM i=0 TO 3;
             IF (ActionText[i].text_id != 0)
                 delete_text(ActionText[i].text_id);
                 ActionText[i].text_id = 0;
@@ -2539,97 +2726,9 @@ BEGIN
                 delete_text(EnemyText[i].text_id);
                 EnemyText[i].text_id = 0;
             END
-            i++;
         END
 
-        // Check victory condition first
-        enemy_alive_count = 0;
-        i = 0;
-        WHILE (i < num_enemies)
-            IF (Enemies[i].alive == 1)
-                enemy_alive_count++;
-            END
-            i++;
-        END
-
-        IF (enemy_alive_count == 0 AND battle_active == 1)
-            // All enemies defeated - victory!
-            // Only give rewards once
-            reward_gold_total = 0;
-            items_gained = 0;
-            i = 0;
-            WHILE (i < num_enemies)
-                player_gold = player_gold + MonsterList[Enemies[i].monster_id].reward_gold;
-                reward_gold_total = reward_gold_total + MonsterList[Enemies[i].monster_id].reward_gold;
-
-                // Add item to inventory
-                found = -1;
-                FOR (j = 0; j < item_count; j++)
-                    IF (strcmp(inventory[j].item, ItemList[MonsterList[Enemies[i].monster_id].reward_item_id].name) == 0)
-                        found = j;
-                        BREAK;
-                    END
-                END
-                IF (found != -1)
-                    inventory[found].quantity++;
-                ELSE
-                    IF (item_count < 10)
-                        inventory[item_count].item = ItemList[MonsterList[Enemies[i].monster_id].reward_item_id].name;
-                        inventory[item_count].quantity = 1;
-                        inventory[item_count].description = ItemList[MonsterList[Enemies[i].monster_id].reward_item_id].description;
-                        item_count++;
-                    END
-                END
-                items_gained++;
-                i++;
-            END
-
-            IF (msg_id != 0)
-                delete_text(msg_id);
-            END
-            // Clear action and enemy texts
-            i = 0;
-            WHILE (i < 4)
-                IF (ActionText[i].text_id != 0)
-                    delete_text(ActionText[i].text_id);
-                    ActionText[i].text_id = 0;
-                END
-                IF (EnemyText[i].text_id != 0)
-                    delete_text(EnemyText[i].text_id);
-                    EnemyText[i].text_id = 0;
-                END
-                i++;
-            END
-            IF (msg_id != 0)
-                delete_text(msg_id);
-            END
-            battle_msg = "VICTORY! Gained ";
-            battle_msg = battle_msg + itoa(reward_gold_total);
-            battle_msg = battle_msg + " gold and ";
-            battle_msg = battle_msg + itoa(items_gained);
-            battle_msg = battle_msg + " ";
-            battle_msg = battle_msg + ItemList[MonsterList[0].reward_item_id].name;
-            battle_msg = battle_msg + "s!";
-            msg_id = write(0, ScreenConfig.width / 2, 175, 4, battle_msg);
-            ChangeSong("MOD/ILUETNI.XM");
-            msg_timer = estimatedSeconds(2);
-            battle_active = 0; // This prevents re-entry into this block
-            // Wait for message to finish
-            WHILE (msg_timer > 0)
-                // Draw HUD box
-                put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
-                // Draw enemies during wait
-                j = 0;
-                WHILE (j < num_enemies)
-                    IF (Enemies[j].alive == 1)
-                        xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].graph, 80 + j * 80, 60, 0, 100, 0, 0);
-                    END
-                    j++;
-                END
-                FRAME;
-                msg_timer--;
-            END
-        END
+        handle_victory(num_enemies, OFFSET(battle_active), OFFSET(message_text_id), OFFSET(msg_timer), battle_msg);
 
         // Only process turns when msg_timer is 0 and battle is still active
         IF (msg_timer == 0 AND battle_active == 1)
@@ -2664,14 +2763,7 @@ BEGIN
                         ActionText[2].text_id = write(0, 30, ScreenConfig.height - 20, 0, ActionText[2].text);
 
                         // Navigation
-                        IF (KEY(Controls.up) AND input_timer == 0)
-                            selected_action = (selected_action - 1 + 3) % 3;
-                            input_timer = 5;
-                        END
-                        IF (KEY(Controls.down) AND input_timer == 0)
-                            selected_action = (selected_action + 1) % 3;
-                            input_timer = 5;
-                        END
+                        navigate_menu(OFFSET(selected_action), 3, OFFSET(input_timer));
 
                         // Action selection
                         IF (KEY(Controls.talk) AND input_timer == 0)
@@ -2694,22 +2786,18 @@ BEGIN
                                     i++;
                                 END
                                 // Clear action texts
-                                i = 0;
-                                WHILE (i < 3)
+                                FROM i=0 TO 2;
                                     IF (ActionText[i].text_id != 0)
                                         delete_text(ActionText[i].text_id);
                                         ActionText[i].text_id = 0;
                                     END
-                                    i++;
                                 END
                                 // Clear enemy texts
-                                i = 0;
-                                WHILE (i < 3)
+                                FROM i=0 TO 2;
                                     IF (EnemyText[i].text_id != 0)
                                         delete_text(EnemyText[i].text_id);
                                         EnemyText[i].text_id = 0;
                                     END
-                                    i++;
                                 END
                                 input_timer = 10;
                             ELSE
@@ -2718,22 +2806,18 @@ BEGIN
                                 selecting_magic = 1;
                                 selected_magic = 0;
                                 // Clear action texts
-                                i = 0;
-                                WHILE (i < 3)
+                                FROM i=0 TO 2;
                                     IF (ActionText[i].text_id != 0)
                                         delete_text(ActionText[i].text_id);
                                         ActionText[i].text_id = 0;
                                     END
-                                    i++;
                                 END
                                 // Clear enemy texts
-                                i = 0;
-                                WHILE (i < 3)
+                                FROM i=0 TO 2;
                                     IF (EnemyText[i].text_id != 0)
                                         delete_text(EnemyText[i].text_id);
                                         EnemyText[i].text_id = 0;
                                     END
-                                    i++;
                                 END
                                 input_timer = 10;
                                 ELSE
@@ -2742,17 +2826,15 @@ BEGIN
                                         delete_text(msg_id);
                                     END
                                     msg_id = write(0, 50, 170, 0, "Escaped!");
-                                    msg_timer = estimatedSeconds(2);
+                                    msg_timer = seconds_to_frames(2);
                                     battle_active = 0;
                                     input_timer = 10;
                                     // Clear action texts
-                                    i = 0;
-                                    WHILE (i < 4)
+                                    FROM i=0 TO 3;
                                         IF (ActionText[i].text_id != 0)
                                             delete_text(ActionText[i].text_id);
                                             ActionText[i].text_id = 0;
                                         END
-                                        i++;
                                     END
                                     // Wait for message to finish
                                     WHILE (msg_timer > 0)
@@ -2762,7 +2844,7 @@ BEGIN
                                         j = 0;
                                         WHILE (j < num_enemies)
                                             IF (Enemies[j].alive == 1)
-                                                xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].graph, 80 + j * 80, 60, 0, 100, 0, 0);
+                                                xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].sprite_graph_id, 80 + j * 80, 60, 0, 100, 0, 0);
                                             END
                                             j++;
                                         END
@@ -2810,13 +2892,11 @@ BEGIN
                             // Confirm attack or spell
                             selecting_target = 0;
                             // Clear enemy texts
-                            i = 0;
-                            WHILE (i < 3)
+                            FROM i=0 TO 2;
                                 IF (EnemyText[i].text_id != 0)
                                     delete_text(EnemyText[i].text_id);
                                     EnemyText[i].text_id = 0;
                                 END
-                                i++;
                             END
                             IF (casting_spell == -1)
                                 // Physical attack
@@ -2828,7 +2908,7 @@ BEGIN
                                 IF (Enemies[selected_target].current_hp <= 0)
                                     Enemies[selected_target].current_hp = 0;
                                     Enemies[selected_target].dying = 1;
-                                    Enemies[selected_target].dying_timer = estimatedSeconds(1);
+                                    Enemies[selected_target].dying_timer = seconds_to_frames(1);
                                     battle_msg = PlayerStats.name + " attacks! " + MonsterList[Enemies[selected_target].monster_id].name + " defeated!";
                                 ELSE
                                     battle_msg = PlayerStats.name + " attacks!";
@@ -2847,7 +2927,7 @@ BEGIN
                                 IF (Enemies[selected_target].current_hp <= 0)
                                     Enemies[selected_target].current_hp = 0;
                                     Enemies[selected_target].dying = 1;
-                                    Enemies[selected_target].dying_timer = estimatedSeconds(1);
+                                    Enemies[selected_target].dying_timer = seconds_to_frames(1);
                                     battle_msg = PlayerStats.name + " casts " + HeroList[0].spells[casting_spell].name + "! " + MonsterList[Enemies[selected_target].monster_id].name + " defeated!";
                                 ELSE
                                     battle_msg = PlayerStats.name + " casts " + HeroList[0].spells[casting_spell].name + "!";
@@ -2858,7 +2938,7 @@ BEGIN
                                 delete_text(msg_id);
                             END
                             msg_id = write(0, ScreenConfig.width / 2, 175, 4, battle_msg);
-                            msg_timer = estimatedSeconds(2);
+                            msg_timer = seconds_to_frames(2);
                             player_turn = 0;
                             input_timer = 10;
                             // Wait for message to finish
@@ -2869,7 +2949,7 @@ BEGIN
                                 j = 0;
                                 WHILE (j < num_enemies)
                                     IF (Enemies[j].alive == 1)
-                                        xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].graph, 80 + j * 80, 60, 0, 100, 0, 0);
+                                        xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].sprite_graph_id, 80 + j * 80, 60, 0, 100, 0, 0);
                                     END
                                     j++;
                                 END
@@ -2953,14 +3033,14 @@ BEGIN
                                                     IF (Enemies[i].current_hp <= 0)
                                                         Enemies[i].current_hp = 0;
                                                         Enemies[i].dying = 1;
-                                                        Enemies[i].dying_timer = estimatedSeconds(1);
+                                                        Enemies[i].dying_timer = seconds_to_frames(1);
                                                     END
                                                 END
                                                 i++;
                                             END
                                             battle_msg = PlayerStats.name + " casts " + HeroList[0].spells[selected_magic].name + "!";
                                             msg_id = write(0, ScreenConfig.width / 2, 175, 4, battle_msg);
-                                            msg_timer = estimatedSeconds(2);
+                                            msg_timer = seconds_to_frames(2);
                                             player_turn = 0;
                                             input_timer = 10;
                                         ELSE // Ruination Flame - single target very high damage
@@ -2982,7 +3062,7 @@ BEGIN
                                 ELSE
                                     battle_msg = "Not enough MP!";
                                     msg_id = write(0, ScreenConfig.width / 2, 175, 4, battle_msg);
-                                    msg_timer = estimatedSeconds(2);
+                                    msg_timer = seconds_to_frames(2);
                                     input_timer = 10;
                                     // Wait for message to finish
                                     WHILE (msg_timer > 0)
@@ -2992,7 +3072,7 @@ BEGIN
                                         j = 0;
                                         WHILE (j < num_enemies)
                                             IF (Enemies[j].alive == 1)
-                                                xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].graph, 80 + j * 80, 60, 0, 100, 0, 0);
+                                                xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].sprite_graph_id, 80 + j * 80, 60, 0, 100, 0, 0);
                                             END
                                             j++;
                                         END
@@ -3000,13 +3080,11 @@ BEGIN
                                         msg_timer--;
                                     END
                                     // Clear texts
-                                    i = 0;
-                                    WHILE (i < 2)
+                                    FROM i=0 TO 1;
                                         IF (ActionText[i].text_id != 0)
                                             delete_text(ActionText[i].text_id);
                                             ActionText[i].text_id = 0;
                                         END
-                                        i++;
                                     END
                                 END
                             ELSE
@@ -3032,120 +3110,7 @@ BEGIN
             END
         END
 
-        IF (player_turn == 0)
-            // Check if any enemy is dying
-            any_dying = 0;
-            i = 0;
-            WHILE (i < num_enemies)
-                IF (Enemies[i].dying == 1)
-                    any_dying = 1;
-                    BREAK;
-                END
-                i++;
-            END
-
-            IF (any_dying == 0)
-                // Enemy turn - attacks immediately since msg_timer == 0
-                i = 0;
-                WHILE (i < num_enemies)
-                    IF (Enemies[i].alive == 1)
-                        damage = MonsterList[Enemies[i].monster_id].attack - PlayerStats.defense;
-                        IF (damage < 1)
-                            damage = 1;
-                        END
-                        PlayerStats.current_hp = PlayerStats.current_hp - damage;
-
-                        IF (msg_id != 0)
-                            delete_text(msg_id);
-                        END
-                        battle_msg = MonsterList[Enemies[i].monster_id].name + " attacks!";
-                        msg_id = write(0, ScreenConfig.width / 2, 175, 4, battle_msg);
-                        msg_timer = estimatedSeconds(2);
-                        // Wait for message to finish
-                        WHILE (msg_timer > 0)
-                            // Draw HUD box
-                            put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
-                            // Draw enemies during wait
-                            j = 0;
-                            WHILE (j < num_enemies)
-                                IF (Enemies[j].alive == 1)
-                                    xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].graph, 80 + j * 80, 60, 0, 100, 0, 0);
-                                END
-                                j++;
-                            END
-                            FRAME;
-                            msg_timer--;
-                        END
-                        // Then show damage message
-                        IF (msg_id != 0)
-                            delete_text(msg_id);
-                        END
-                        battle_msg = "You took ";
-                        battle_msg = battle_msg + itoa(damage);
-                        battle_msg = battle_msg + " damage!";
-                        msg_id = write(0, ScreenConfig.width / 2, 175, 4, battle_msg);
-                        msg_timer = estimatedSeconds(2);
-                        // Wait again
-                        WHILE (msg_timer > 0)
-                            // Draw HUD box
-                            put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
-                            // Draw enemies during wait
-                            j = 0;
-                            WHILE (j < num_enemies)
-                                IF (Enemies[j].alive == 1)
-                                    xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].graph, 80 + j * 80, 60, 0, 100, 0, 0);
-                                END
-                                j++;
-                            END
-                            FRAME;
-                            msg_timer--;
-                        END
-                        BREAK; // One enemy attacks per turn
-                    END
-                    i++;
-                END
-
-                IF (PlayerStats.current_hp <= 0)
-                    PlayerStats.current_hp = 0;
-                    IF (msg_id != 0)
-                        delete_text(msg_id);
-                    END
-                    // Clear action and enemy texts
-                    j = 0;
-                    WHILE (j < 3)
-                        IF (ActionText[j].text_id != 0)
-                            delete_text(ActionText[j].text_id);
-                            ActionText[j].text_id = 0;
-                        END
-                        IF (EnemyText[j].text_id != 0)
-                            delete_text(EnemyText[j].text_id);
-                            EnemyText[j].text_id = 0;
-                        END
-                        j++;
-                    END
-                    msg_id = write(0, 50, 170, 0, "DEFEAT!");
-                    msg_timer = estimatedSeconds(2);
-                    // Wait for message to finish
-                    WHILE (msg_timer > 0)
-                        // Draw HUD box
-                        put(hud_fpg_id, 1, ScreenConfig.width / 2, ScreenConfig.height - 25);
-                        // Draw enemies
-                        j = 0;
-                        WHILE (j < num_enemies)
-                            IF (Enemies[j].alive == 1)
-                                xput(monsters_fpg_id, MonsterList[Enemies[j].monster_id].graph, 80 + j * 80, 60, 0, 100, 0, 0);
-                            END
-                            j++;
-                        END
-                        FRAME;
-                        msg_timer--;
-                    END
-                    battle_active = 0;
-                ELSE
-                    player_turn = 1;
-                END
-            END
-        END
+        handle_turns(num_enemies, OFFSET(player_turn), OFFSET(battle_active), OFFSET(message_text_id), OFFSET(msg_timer), battle_msg, OFFSET(input_timer));
 
         // Display player HP/MP
         IF (hp_mp_id != 0)
@@ -3171,14 +3136,13 @@ BEGIN
                 delete_text(hp_mp_id);
             END
             i = 0;
-            WHILE (i < 3)
+            FROM i=0 TO 2;
                 IF (ActionText[i].text_id != 0)
                     delete_text(ActionText[i].text_id);
                 END
                 IF (EnemyText[i].text_id != 0)
                     delete_text(EnemyText[i].text_id);
                 END
-                i++;
             END
 
             // Clean up battle message
@@ -3195,5 +3159,49 @@ BEGIN
         END
 
         FRAME;
+    END
+END
+
+// Generic function to handle menu navigation
+FUNCTION navigate_menu(INT selected_offset, INT menu_count, INT input_timer_offset)
+BEGIN
+    IF (KEY(Controls.up) AND *input_timer_offset == 0)
+        *selected_offset = (*selected_offset - 1 + menu_count) % menu_count;
+        *input_timer_offset = 5;
+    END
+    IF (KEY(Controls.down) AND *input_timer_offset == 0)
+        *selected_offset = (*selected_offset + 1) % menu_count;
+        *input_timer_offset = 5;
+    END
+END
+
+// Generic function to render menu options
+FUNCTION render_menu(INT count, INT start_x, INT start_y, INT spacing)
+PRIVATE
+    i;
+BEGIN
+    i = 0;
+    WHILE (i < count)
+        MenuOption[i].text_id = write(0, start_x, start_y + i * spacing, 4, MenuOption[i].text);
+        i++;
+    END
+END
+
+// Generic function to clear menu text
+FUNCTION clear_menu(INT count)
+PRIVATE
+    i;
+BEGIN
+    i = 0;
+    WHILE (i < count)
+        IF (MenuOption[i].text_id != 0)
+            delete_text(MenuOption[i].text_id);
+            MenuOption[i].text_id = 0;
+        END
+        IF (MenuOption[i].desc_id != 0)
+            delete_text(MenuOption[i].desc_id);
+            MenuOption[i].desc_id = 0;
+        END
+        i++;
     END
 END
