@@ -1,10 +1,11 @@
 //------------------------------------------------------------------------------
-// TÍTULO:      VSHOOT04.PRG - Juego de Disparos Vertical Optimizado
+// TÍTULO:      VSHOOT05.PRG - Juego de Disparos Vertical Optimizado con Arrays
 // AUTOR:       Sebastian J. MONCHO MAQUET
 // FECHA:       18/01/2026
 // DESCRIPCIÓN: Versión optimizada del juego con mejoras en calidad de código:
 //              - Procesos genéricos para enemigos (tipo 1 y 2 en uno solo).
-//              - Funciones geméricas para las cuentas regresivas.
+//              - Funciones genéricas para las cuentas regresivas.
+//              - Todos los enemigos manejados en un único proceso usando structs (STRUCT Enemigo).
 //
 // NOTA:        Usa las flechas para mover la nave, espacio para disparar y ESC para salir.
 //              Requiere la paleta DIV2.PAL en el mismo directorio.
@@ -108,13 +109,16 @@ GLOBAL
     enemigo_muerto_id = 0;              // ID del enemigo marcado como "muerto"
     controles_activos = 0;              // Contemplaa si los controles del jugador están activos (1) o desactivados (0), empleado, por ejemplo, durante la cuenta regresiva
 
-// Variables locales
-// Las variables locales son atributos presentes en TODOS los process.
-// - Su valor puede ser modificado únicamente desde su propio process
-// - No obstante, podemos consultarlas desde cualquier otro process -> TIPO = enemigo.tipo
-// - Sirve para falsear la orientación a objetos, actuaría como una "propiedad" del objeto en modo read only
-LOCAL
-    INT tipo; // Tipo de enemigo (1 o 2), empleado sólo en el proceso genérico de enemigos
+// Definición de struct para enemigo
+STRUCT enemigo[10]
+    INT x;       // Posición X
+    INT y;       // Posición Y
+    INT tipo;    // Tipo de enemigo (1 o 2)
+    INT activo;  // Si está activo (1) o muerto/inactivo (0)
+    INT dir;     // Dirección horizontal para tipo1 (1 derecha, -1 izquierda)
+    INT ang;     // Ángulo para movimiento circular de tipo2
+    INT draw[5]; // Array de IDs de dibujos (5 slots por enemigo)
+END
 
 // Variables internas
 // Estas variables son utilizadas dentro del programa principal para gestionar la lógica del juego.
@@ -222,21 +226,37 @@ BEGIN
 END
 
 // Función: crear_enemigos
-// Descripción: Crea los procesos de enemigos al inicio de cada nivel.
-// - Genera 5 enemigos tipo 1 (a la izquierda) y 5 tipo 2 (a la derecha).
+// Descripción: Inicializa el STRUCT de enemigos al inicio de cada nivel.
+// - Genera 5 enemigos tipo 1 (a la izquierda) y 5 tipo 2 (a la derecha) en el array STRUCT.
 PROCESS crear_enemigos();
 PRIVATE
     i;  // Variable para el bucle
+    j;  // Variable para inicializar draws
 BEGIN
     // Crea 5 enemigos tipo 1 en posiciones espaciadas en la izquierda
     FROM i=0 TO 4;
-        enemigo(ESPACIADO_ENEMIGO1_X + i * ESPACIADO_ENEMIGO1_X, ESPACIADO_ENEMIGO1_Y_INICIAL + i * ESPACIADO_ENEMIGO1_Y, 1);  // Posición x e y calculada
+        enemigo[i].x = ESPACIADO_ENEMIGO1_X + i * ESPACIADO_ENEMIGO1_X;
+        enemigo[i].y = ESPACIADO_ENEMIGO1_Y_INICIAL + i * ESPACIADO_ENEMIGO1_Y;
+        enemigo[i].tipo = 1;
+        enemigo[i].activo = 1;
+        enemigo[i].dir = 1;
+        enemigo[i].ang = 0;
+        FROM j=0 TO 4; enemigo[i].draw[j] = 0; END
     END
 
     // Crea 5 enemigos tipo 2 en posiciones espaciadas en la derecha
-    FROM i=0 TO 4;
-        enemigo(ESPACIADO_ENEMIGO2_X_INICIAL + i * ESPACIADO_ENEMIGO2_X, ESPACIADO_ENEMIGO2_Y_INICIAL + i * ESPACIADO_ENEMIGO2_Y, 2);  // Posición x e y calculada
+    FROM i=5 TO 9;
+        enemigo[i].x = ESPACIADO_ENEMIGO2_X_INICIAL + (i-5) * ESPACIADO_ENEMIGO2_X;
+        enemigo[i].y = ESPACIADO_ENEMIGO2_Y_INICIAL + (i-5) * ESPACIADO_ENEMIGO2_Y;
+        enemigo[i].tipo = 2;
+        enemigo[i].activo = 1;
+        enemigo[i].dir = 0;
+        enemigo[i].ang = 0;
+        FROM j=0 TO 4; enemigo[i].draw[j] = 0; END
     END
+
+    // Crear el proceso único de enemigos
+    proceso_enemigos();
 END
 
 // Proceso: jugador
@@ -367,29 +387,30 @@ END
 FUNCTION comprobar_colision_jugador_enemigos(INT x, INT y);
 PRIVATE
     id_enemigo;  // ID del enemigo para iterar
+    INT i;
 BEGIN
-    // Comprobamos la colisión con enemigos
-    // Si existen varios procesos del tipo que se ha especificado,
-    // la función get_id() devolverá el resto de los identificadores en las sucesivas llamadas que se realicen a la misma.
-    // Una vez se hayan devuelto todos los códigos identificadores, la función devolverá 0, hasta que se vuelva a ejecutar una sentencia FRAME
-    // En cada frame, la lista que devuelve get_id() se reinicia, es por eso que aqui no ponemos ningún FRAME
-    id_enemigo = get_id(type enemigo);
-    // Bucle, recorriendo todos los enemigos, enemigo a enemigo
-    WHILE (id_enemigo)
-        // Calculamos distancia entre jugador y enemigo
-        IF (fget_dist(x, y, id_enemigo.x, id_enemigo.y) < DISTANCIA_COLISION)
-            // Significa que ambos han chocado y ambos mueren
-            puntos += PUNTOS_POR_ENEMIGO;  // Sumamos los puntos
-            explosion(id_enemigo.x, id_enemigo.y, COLOR_ENEMIGO2);  // Explosión del enemigo
-            enemigo_muerto_id = id_enemigo;  // Marcar enemigo como muerto
-            explosion(x, y, COLOR_NAVE);  // Explosión del jugador
-            game_over = 1;  // Marcamos game over (lo leerá el process principal y actuará en consecuencia)
-            RETURN;
+    // Comprobamos la colisión con enemigos iterando sobre el STRUCT
+    FOR (id_enemigo=0; id_enemigo<10; id_enemigo++)
+        IF (enemigo[id_enemigo].activo == 1)
+            // Calculamos distancia entre jugador y enemigo
+            IF (fget_dist(x, y, enemigo[id_enemigo].x, enemigo[id_enemigo].y) < DISTANCIA_COLISION)
+                // Significa que ambos han chocado y ambos mueren
+                puntos += PUNTOS_POR_ENEMIGO;  // Sumamos los puntos
+                IF (enemigo[id_enemigo].tipo == 1)
+                    explosion(enemigo[id_enemigo].x, enemigo[id_enemigo].y, COLOR_ENEMIGO1);  // Explosión del enemigo
+                ELSE
+                    explosion(enemigo[id_enemigo].x, enemigo[id_enemigo].y, COLOR_ENEMIGO2);  // Explosión del enemigo
+                END
+                enemigo[id_enemigo].activo = 0;  // Marcar enemigo como muerto
+                FROM i=0 TO 4;
+                    IF (enemigo[id_enemigo].draw[i] != 0) delete_draw(enemigo[id_enemigo].draw[i]); END
+                END
+                enemigos_vivos--;  // Reducir contador
+                explosion(x, y, COLOR_NAVE);  // Explosión del jugador
+                game_over = 1;  // Marcamos game over (lo leerá el process principal y actuará en consecuencia)
+                RETURN;
+            END
         END
-
-        // Siguiente enemigo, hasta que no hagamos FRAME, get_id() devolverá el siguiente ID
-        // cuando no queden más, devolverá 0 y saldremos del bucle
-        id_enemigo = get_id(type enemigo);
     END
 END
 
@@ -403,6 +424,9 @@ END
 PROCESS bala_jugador(x, y);
 PRIVATE
     bala_draw;  // ID del dibujo de la bala
+    INT enemigo_index;      // Index del enemigo con el que colisiona (-1 si no hay colisión)
+    INT color_explosion;    // Color de la explosión según el tipo de enemigo
+    INT i;                  // Variable para bucles
 BEGIN
     LOOP
         // Borramos el  dibujo anterior si existe
@@ -429,7 +453,20 @@ BEGIN
         END
 
         // Comprobamos si colisiona con algún enemigo
-        IF (comprobar_colision_bala_enemigos(x, y))
+        enemigo_index = comprobar_colision_bala_enemigos(x, y);
+        IF (enemigo_index != -1)
+            puntos += PUNTOS_POR_ENEMIGO;
+            IF (enemigo[enemigo_index].tipo == 1)
+                color_explosion = COLOR_ENEMIGO1;
+            ELSE
+                color_explosion = COLOR_ENEMIGO2;
+            END
+            explosion(enemigo[enemigo_index].x, enemigo[enemigo_index].y, color_explosion);
+            enemigo[enemigo_index].activo = 0;
+            FROM i=0 TO 4;
+                IF (enemigo[enemigo_index].draw[i] != 0) delete_draw(enemigo[enemigo_index].draw[i]); END
+            END
+            enemigos_vivos--;
             delete_draw(bala_draw);  // Ha colisionado, borramos el dibujo antes de salir
             RETURN;
         END
@@ -439,102 +476,97 @@ BEGIN
 END
 
 // Función: comprobar_colision_bala_enemigos
-// Descripción: Verifica si la bala del jugador colisiona con algún enemigo. Si hay colisión, suma puntos, crea explosión y marca al enemigo para morir.
+// Descripción: Verifica si la bala del jugador colisiona con algún enemigo. Si hay colisión, retorna el index del enemigo.
 // Parámetros:
 //   - x: Posición x de la bala.
 //   - y: Posición y de la bala.
-// Retorna: 1 si hay colisión, 0 si no.
+// Retorna: Index del enemigo colisionado (0-4), o -1 si no hay colisión.
 // Los PROCESS se ejecutan en paralelo, mientras que las FUNCTION se ejecutan de forma secuencial
 // - Es decir, hasta que no termine esta función, el proceso que lo llama queda bloqueado
-FUNCTION comprobar_colision_bala_enemigos(x, y);
+FUNCTION comprobar_colision_bala_enemigos(INT x, INT y);
 PRIVATE
-    id_enemigo;       // ID del enemigo para iterar
-    color_explosion;  // Color para la explosión del enemigo
+    INT i;  // Variable para el bucle
 BEGIN
-    // Comprobamos si hay colisión con enemigos
-    // Para ello obtenemos el primer ID de enemigo
-    id_enemigo = get_id(type enemigo);
-    // Bucle, recorriendo todos los enemigos
-    WHILE (id_enemigo)
-        // Obtenemos la distancia entre bala y enemigo
-        IF (fget_dist(x, y, id_enemigo.x, id_enemigo.y) < DISTANCIA_COLISION)
-            // Hay colisión
-            puntos += PUNTOS_POR_ENEMIGO;  // Sumamos puntos
-            // Determinamos el color de la explosión según el tipo de enemigo
-            IF (id_enemigo.tipo == 1)
-                color_explosion = COLOR_ENEMIGO1;
-            ELSE
-                color_explosion = COLOR_ENEMIGO2;
+    // Comprobamos si hay colisión con enemigos iterando sobre el array
+    FOR (i=0; i<10; i++)
+        IF (enemigo[i].activo == 1)
+            // Obtenemos la distancia entre bala y enemigo
+            IF (fget_dist(x, y, enemigo[i].x, enemigo[i].y) < DISTANCIA_COLISION)
+                RETURN(i);  // Retornamos el index del enemigo colisionado
             END
-            explosion(id_enemigo.x, id_enemigo.y, color_explosion);  // Creamos explosión
-            enemigo_muerto_id = id_enemigo;  // Marcamos el enemigo como muerto
-            RETURN(1);  // 1 -> Indicamos colisión
         END
-        id_enemigo = get_id(type enemigo);  // Siguiente enemigo
     END
-    RETURN(0);
+    RETURN(-1);  // No hay colisión
 END
 
-// Proceso: enemigo
-// Descripción: Controla el comportamiento de un enemigo (tipo 1 o 2).
-// - Se mueve según el tipo, dispara balas y verifica si muere.
-// Parámetros:
-//   - x: Posición inicial x.
-//   - y: Posición inicial y.
-//   - tipo: Tipo de enemigo (1 o 2).
+// Proceso: proceso_enemigos
+// Descripción: Controla el comportamiento de todos los enemigos usando un STRUCT array.
+// - Maneja movimiento, disparos y eliminación de enemigos tipo 1 y 2.
 // (OPTIMIZACIÓN: Proceso genérico para ambos tipos de enemigos.
 // Reduce duplicación de código. Usa parámetro 'tipo' para diferenciar comportamiento.
 // Mejora mantenibilidad: cambios en un lugar afectan a ambos tipos.)
-PROCESS enemigo(x, y, tipo);
+PROCESS proceso_enemigos();
 PRIVATE
-    dir = 1;  // Para tipo 1
-    ang = 0;  // Para tipo 2
-    tiempo = 0;
-    temp_id = 0;  // Para iterar en bucles
-    enemigo_draws[5];  // 0: box/circulo para tipo1, 1-4: lineas para tipo2, 5: circulo tipo2
+    INT i, j;
+    INT tiempo_disparo[10];  // Contador de tiempo para disparos de cada enemigo
 BEGIN
-    // Dibujo inicial del enemigo
-    IF (tipo == 1)
-        dibujar_enemigo_tipo1(&enemigo_draws[0], &enemigo_draws[1], x, y);
-    ELSE
-        dibujar_enemigo_tipo2(&enemigo_draws[0], &enemigo_draws[1], &enemigo_draws[2], &enemigo_draws[3], &enemigo_draws[4], x, y);
+    // Dibujo inicial de todos los enemigos
+    FOR (i=0; i<10; i++)
+        IF (enemigo[i].activo == 1)
+            IF (enemigo[i].tipo == 1)
+                // Dibujamos el enemigo
+                dibujar_enemigo_tipo1(&enemigo[i].draw[0], &enemigo[i].draw[1], enemigo[i].x, enemigo[i].y);
+            ELSE
+                // Dibujamos el enemigo de tipo 2
+                dibujar_enemigo_tipo2(&enemigo[i].draw[0], &enemigo[i].draw[1], &enemigo[i].draw[2], &enemigo[i].draw[3], &enemigo[i].draw[4], enemigo[i].x, enemigo[i].y);
+            END
+        END
     END
 
     LOOP
+        // Si el juego ha terminado, salimos del proceso
         IF (game_over == 1) RETURN; END
 
-        // Verificar muerte
-        IF (enemigo_muerto_id == id)
-            // Borrar dibujos
-            FROM temp_id=0 TO 4;
-                IF (enemigo_draws[temp_id] != 0) delete_draw(enemigo_draws[temp_id]); END
+        // Por cada enemigo
+        FOR (i=0; i<10; i++)
+            // Verificamos si está vivo
+            IF (enemigo[i].activo == 1)
+                // Verificamos si los controles están activos (p. ej., no durante la cuenta regresiva)
+                IF (controles_activos == 1)
+                    // Movemos en función del tipo
+                    IF (enemigo[i].tipo == 1)
+                        // Movemos el enemigo tipo 1
+                        mover_enemigo_tipo1(&enemigo[i].x, &enemigo[i].y, &enemigo[i].dir);
+                    ELSE
+                        // Movemos el enemigo tipo 2
+                        mover_enemigo_tipo2(&enemigo[i].x, &enemigo[i].y, &enemigo[i].ang);
+                    END
+
+                    // Verificar si sale de pantalla
+                    IF (enemigo[i].tipo == 1 AND enemigo[i].y > ALTO_PANTALLA + TAMANO_ENEMIGO1)
+                        enemigo[i].activo = 0;
+                        FROM j=0 TO 4;
+                            IF (enemigo[i].draw[j] != 0) delete_draw(enemigo[i].draw[j]); END
+                        END
+                    END
+
+                    // Dibujamos el enemigo en función del tipo
+                    IF (enemigo[i].tipo == 1)
+                        dibujar_enemigo_tipo1(&enemigo[i].draw[0], &enemigo[i].draw[1], enemigo[i].x, enemigo[i].y);
+                    ELSE
+                        dibujar_enemigo_tipo2(&enemigo[i].draw[0], &enemigo[i].draw[1], &enemigo[i].draw[2], &enemigo[i].draw[3], &enemigo[i].draw[4], enemigo[i].x, enemigo[i].y);
+                    END
+
+                    // Disparar en función del tipo
+                    IF (enemigo[i].tipo == 1)
+                        disparar_enemigo_tipo1(&tiempo_disparo[i], enemigo[i].x, enemigo[i].y);
+                    ELSE
+                        disparar_enemigo_tipo2(&tiempo_disparo[i], enemigo[i].x, enemigo[i].y);
+                    END
+                END
             END
-            enemigos_vivos--;
-            enemigo_muerto_id = 0;
-            RETURN;
         END
-        
-        // Dibujar y mover basado en tipo solo si controles activos
-        IF (controles_activos == 1)
-            IF (tipo == 1)
-                dibujar_enemigo_tipo1(&enemigo_draws[0], &enemigo_draws[1], x, y);
-                mover_enemigo_tipo1(&x, &y, &dir);
-                IF (y > ALTO_PANTALLA + 10) RETURN; END
-            ELSE
-                dibujar_enemigo_tipo2(&enemigo_draws[0], &enemigo_draws[1], &enemigo_draws[2], &enemigo_draws[3], &enemigo_draws[4], x, y);
-                mover_enemigo_tipo2(&x, &y, &ang);
-            END
-        END
-        
-        // Disparar si corresponde
-        IF (controles_activos == 1)
-            IF (tipo == 1)
-                disparar_enemigo_tipo1(&tiempo, x, y);
-            ELSE
-                disparar_enemigo_tipo2(&tiempo, x, y);
-            END
-        END
-        
+
         FRAME;
     END
 END
