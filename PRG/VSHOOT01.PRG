@@ -8,13 +8,7 @@
 //              Código y comentarios en castellano para facilitar la comprensión (por petición).
 //------------------------------------------------------------------------------
 
-PROGRAM vshoot01;
-
-// Variables globales del juego
-GLOBAL
-    INT puntos = 0;                     // Puntuación (no usada, pero para compatibilidad)
-    INT controles_activos = 1;          // Controles activos
-
+PROGRAM vshooter;
 // Programa principal
 BEGIN
     // Arrancamos el juego a 320x200 a 60 FPS con la paleta cargada
@@ -79,7 +73,9 @@ BEGIN
         END
 
         // Salir con ESC
-        IF (key(_esc)) EXIT("Gracias por jugar", 0); END
+        IF (key(_esc))
+            EXIT("Gracias por jugar.", 0);
+        END
 
         FRAME;  // Esperar al siguiente frame
     END

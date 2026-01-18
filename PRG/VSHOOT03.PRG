@@ -10,6 +10,7 @@
 //              Requiere la paleta DIV2.PAL en el mismo directorio.
 //              Código y comentarios en castellano para facilitar la comprensión (por petición).
 //------------------------------------------------------------------------------
+
 PROGRAM vshooter;
 // Constantes del juego
 CONST
@@ -289,8 +290,8 @@ PRIVATE
     nave_linea3;        // ID del dibujo de la tercera línea de la nave
 BEGIN
     // Posición inicial de la nave en el centro inferior de la pantalla
-    x = 160;  // Posición inicial x en el centro
-    y = 170;  // Posición inicial y cerca del fondo
+    x = CENTRO_X;  // Posición inicial x en el centro
+    y = ALTO_PANTALLA - TAMANO_NAVE_Y_ALTURA / 2;  // Posición inicial y cerca del fondo
     
     // Bucle principal del jugador
     LOOP
@@ -385,7 +386,7 @@ BEGIN
     
     // Si se presiona espacio y ha pasado el tiempo mínimo, disparamos una bala
     IF (key(_space) AND *tiempo_disparo_offset > TIEMPO_DISPARO_JUGADOR)
-        bala_jugador(x, y - 15);  // Crea una bala, situado arriba de la nave
+        bala_jugador(x, y - TAMANO_NAVE_Y_ALTURA);  // Crea una bala, situado arriba de la nave
         *tiempo_disparo_offset = 0;  // Reiniciamos el timer
     END
 END
@@ -845,9 +846,8 @@ BEGIN
         // Obtenemos el ID del jugador para comprobar colisión
         id_player = get_id(type jugador);
         IF (id_player != 0)
-            // El jugador está vivo, comprobamos colisión
             IF (fget_dist(x, y, id_player.x, id_player.y) < DISTANCIA_COLISION)
-                // Hay colisión
+                // El jugador está vivo y hay colisión
                 explosion(id_player.x, id_player.y, COLOR_NAVE);  // Dibujamos la explosión del jugador
                 game_over = 1;                                    // Marcamos game over
                 RETURN;                                           // Paramamos el proceso
@@ -911,11 +911,10 @@ BEGIN
         // Obtenemos el ID del jugador
         id_jugador = get_id(type jugador);
         IF (id_jugador != 0)
-            // El jugador está vivo, comprobamos colisión
             IF (fget_dist(x, y, id_jugador.x, id_jugador.y) < DISTANCIA_COLISION)
-                // Hemos colisionado, matamos al jugador
+                        // El jugador está vivo y hay colisión matamos al jugador
                 explosion(id_jugador.x, id_jugador.y, COLOR_NAVE);  // Explosión del jugador
-                game_over = 1;                                      // Marcamos game over
+             game_over = 1;                                      // Marcamos game over
                 RETURN;                                             // Paramamos el proceso
             END
         END

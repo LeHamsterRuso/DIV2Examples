@@ -8,12 +8,7 @@
 //              Código y comentarios en castellano para facilitar la comprensión (por petición).
 //------------------------------------------------------------------------------
 
-PROGRAM vshoot02;
-
-// Variables globales
-GLOBAL
-    INT controles_activos = 1;
-
+PROGRAM vshooter;
 // Programa principal
 BEGIN
     // Arrancamos el juego a 320x200 a 60 FPS con la paleta cargada
@@ -36,6 +31,7 @@ END
 
 // Proceso: jugador
 // Descripción: Controla la nave del jugador.
+// - Maneja el dibujo, movimientos y disparos en un bucle continuo.
 PROCESS jugador();
 PRIVATE
     vel = 3;  // Velocidad de movimiento
@@ -81,7 +77,9 @@ BEGIN
         END
 
         // Salir con ESC
-        IF (key(_esc)) EXIT("Gracias por jugar.", 0); END
+        IF (key(_esc))
+            EXIT("Gracias por jugar.", 0);
+        END
 
         FRAME;  // Esperar al siguiente frame
     END
@@ -89,6 +87,7 @@ END
 
 // Proceso: bala_jugador
 // Descripción: Controla el movimiento de una bala disparada por el jugador.
+// - Se mueve hacia arriba y se elimina si sale de la pantalla.
 PROCESS bala_jugador(x, y);
 PRIVATE
     bala_draw;  // ID del dibujo de la bala
