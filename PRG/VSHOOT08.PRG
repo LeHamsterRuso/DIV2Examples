@@ -1,15 +1,14 @@
 //------------------------------------------------------------------------------
-// TÍTULO:      VSHOOT07.PRG - Optimización del Sistema de Balas
+// TÍTULO:      VSHOOT08.PRG - Sistema de Scroll Vertical
 // AUTOR:       Sebastian J. MONCHO MAQUET
 // FECHA:       23/01/2026
-// DESCRIPCIÓN: Versión optimizada que usa arrays/struct separados para balas del jugador y enemigas
-//              en lugar de procesos individuales, mejorando el rendimiento.
-//              - Sistema de balas centralizado con DOS procesos separados (jugador/enemigas)
-//              - Arrays separados: bala_jugador[MAX_BALAS_JUGADOR] y bala_enemigo[MAX_BALAS_ENEMIGO]
-//              - Listas enlazadas separadas para gestión eficiente de slots libres/activos
-//              - Eliminación de magic numbers: constantes para márgenes, colores, tipos de dibujo, gráficos, ángulos
-//              - Reduce overhead de procesos y elimina checks innecesarios por tipo
-//              - Mejora rendimiento cuando hay muchas balas en pantalla (50+)
+// DESCRIPCIÓN: Versión con scroll vertical automático desde VSHOOT07.
+//              - Mapa de 1536 píxeles de altura con scroll desde abajo hacia arriba
+//              - Cámara que se mueve automáticamente hacia arriba
+//              - 80 enemigos repartidos por todo el escenario
+//              - Los enemigos fuera de pantalla no se procesan ni dibujan (optimización)
+//              - Las balas fuera de pantalla se eliminan automáticamente
+
 //
 // NOTA:        Usa las flechas para mover la nave, espacio para disparar y ESC para salir.
 //              Requiere DIV2.PAL, TANYA/LEVEL000.FPG, TANYA/PLAYER.FPG y los FNT de la caperta TANYA.
@@ -43,7 +42,7 @@ CONST
     TAMANO_NAVE_Y_ALTURA = 10;      // Altura del vértice superior de la nave del jugador en píxeles
 
     // Parámetros de enemigos
-    NUM_ENEMIGOS_INICIAL = 10;      // Número inicial de enemigos por nivel
+    NUM_ENEMIGOS_INICIAL = 80;      // Número inicial de enemigos por nivel (repartidos por el mapa)
     DISTANCIA_COLISION = 12;        // Distancia mínima para considerar una colisión entre objetos
     DISTANCIA_COLISION_CUADRADO = 144;  // DISTANCIA_COLISION * DISTANCIA_COLISION (optimización)
     DISTANCIA_COLISION_JUGADOR = 12; // Distancia de colisión para el jugador
@@ -143,6 +142,31 @@ CONST
     POS_Y_PUNTOS_GAMEOVER = CENTRO_Y;   // Posición Y para puntos en game over
     POS_Y_PULSA_ESPACIO = CENTRO_Y + ESPACIADO_GAMEOVER;  // Posición Y para "[PULSA ESPACIO]"
 
+    // Parámetros del scroll
+    ALTO_MAPA = 1536;                   // Altura total del mapa en píxeles
+    VELOCIDAD_SCROLL = 1;               // Velocidad de desplazamiento automático del scroll (1 pixel cada 3 frames)
+    MARGEN_VISIBLE_ARRIBA = 50;         // Margen superior para considerar enemigos visibles (fuera de pantalla)
+    MARGEN_VISIBLE_ABAJO = 50;          // Margen inferior para considerar enemigos visibles (fuera de pantalla)
+    MARGEN_INFERIOR_JUGADOR = 20;       // Margen mínimo del jugador respecto al borde inferior visible
+    MARGEN_LATERAL = 20;                // Margen lateral para posicionar enemigos
+    MARGEN_SUPERIOR = 30;               // Margen superior para posicionar enemigos
+    MARGEN_CORTESIA_INICIAL = 300;      // Margen de cortesía desde el inicio (no generar enemigos cerca del jugador)
+
+    // Distribución escalonada de enemigos por zonas
+    // Dividimos los 80 enemigos en 4 zonas con densidades crecientes hacia arriba (más difícil)
+    // Zona alta (Y bajas) = se ve cuando el scroll ha subido mucho
+    // Zona baja (Y altas) = se ve al principio del juego
+    ENEMIGOS_ZONA_ALTA = 30;        // 30 enemigos en zona alta (más difícil cuando scroll sube)
+    ENEMIGOS_ZONA_MEDIA_ALTA = 25;  // 25 enemigos en zona media-alta
+    ENEMIGOS_ZONA_MEDIA = 15;       // 15 enemigos en zona media
+    ENEMIGOS_ZONA_BAJA = 10;        // 10 enemigos en zona baja (al inicio, más fácil)
+
+    // Límites Y de las zonas de spawneo
+    Y_LIMITE_ZONA_ALTA = 400;         // Zona alta: 0-400px
+    Y_LIMITE_ZONA_MEDIA_ALTA = 800;   // Zona media-alta: 400-800px
+    Y_LIMITE_ZONA_MEDIA = 1000;       // Zona media: 800-1000px
+    // Zona baja: 1000 hasta ALTO_MAPA-MARGEN_CORTESIA_INICIAL
+
     // Rutas de archivos
     RUTA_PALETA = "DIV2.PAL";           // Ruta de la paleta de colores
     RUTA_FPG_LEVEL = "TANYA/LEVEL000.FPG"; // Ruta del FPG del nivel
@@ -174,8 +198,11 @@ GLOBAL
     FNT_COUNTER = 0;                    // Código del fichero FNT para contadores
     FNT_PRESS = 0;                      // Código del fichero FNT para "PULSA ESPACIO"
     FNT_GAMEOVER = 0;                   // Código del fichero FNT para "GAME OVER"
+    scroll_y_objetivo = 0;              // Posición Y objetivo del scroll (para movimiento automático)
+    contador_scroll = 0;                // Contador para scroll lento (mueve 1 pixel cada 3 frames)
 
-STRUCT enemigo[10]
+// Definición de struct para enemigo
+STRUCT enemigo[NUM_ENEMIGOS_INICIAL]
     INT x;       // Posición X
     INT y;       // Posición Y
     INT tipo;    // Tipo de enemigo (1 o 2)
@@ -265,8 +292,8 @@ BEGIN
     enemigos_vivos = NUM_ENEMIGOS_INICIAL;
     game_over = 0;
 
-    // Mostrar fondo
-    put_screen(FPG_LEVEL, 1);
+    // NOTA: No usar put_screen porque ahora usamos scroll
+    // El fondo se muestra automáticamente con start_scroll() en inicio_nivel()
 
     // Iniciar el primer nivel
     // Esto llena la pantalla de enemigos y prepara el juego para empezar.
@@ -275,6 +302,9 @@ BEGIN
 
     // Bucle principal del juego
     LOOP
+        // Actualizar el scroll autom\u00e1ticamente
+        actualizar_scroll();
+
         // Salir con ESC en cualquier momento
         IF (key(_ESC))
             // Salimos del juego
@@ -350,7 +380,7 @@ BEGIN
     bala_jugador[MAX_BALAS_JUGADOR-1].activo = 0;
     bala_jugador[MAX_BALAS_JUGADOR-1].draw_id = 0;
     bala_jugador[MAX_BALAS_JUGADOR-1].siguiente = -1;  // Fin de lista
-    
+
     // Inicializar cabeceras de listas
     primera_bala_jugador_activa = -1;  // Lista de activas vacía
     primer_slot_libre_jugador = 0;      // Lista de libres empieza en 0
@@ -372,7 +402,7 @@ BEGIN
     bala_enemigo[MAX_BALAS_ENEMIGO-1].activo = 0;
     bala_enemigo[MAX_BALAS_ENEMIGO-1].draw_id = 0;
     bala_enemigo[MAX_BALAS_ENEMIGO-1].siguiente = -1;  // Fin de lista
-    
+
     // Inicializar cabeceras de listas
     primera_bala_enemigo_activa = -1;  // Lista de activas vacía
     primer_slot_libre_enemigo = 0;      // Lista de libres empieza en 0
@@ -392,29 +422,29 @@ BEGIN
     IF (primer_slot_libre_jugador == -1)
         RETURN(-1);  // No hay espacio disponible
     END
-    
+
     // Tomar el primer slot libre
     slot = primer_slot_libre_jugador;
     primer_slot_libre_jugador = bala_jugador[slot].siguiente;  // Avanzar la lista de libres
-    
+
     // Inicializar la bala
     bala_jugador[slot].x = pos_x;
     bala_jugador[slot].y = pos_y;
     bala_jugador[slot].activo = 1;
     bala_jugador[slot].draw_id = 0;
-    
+
     // OPTIMIZACIÓN: Precalcular deltas de movimiento (siempre hacia arriba para jugador)
     bala_jugador[slot].dx = 0;
     bala_jugador[slot].dy = -VEL_BALA_JUGADOR;
-    
+
     // OPTIMIZACIÓN: Precalcular tamaño y color (fijos para jugador)
     bala_jugador[slot].tamano = TAMANO_BALA_JUGADOR;
     bala_jugador[slot].color = 10;
-    
+
     // Añadir a la lista de balas activas (al principio)
     bala_jugador[slot].siguiente = primera_bala_jugador_activa;
     primera_bala_jugador_activa = slot;
-    
+
     RETURN(slot);  // Retornar el índice
 END
 
@@ -434,11 +464,11 @@ BEGIN
     IF (primer_slot_libre_enemigo == -1)
         RETURN(-1);  // No hay espacio disponible
     END
-    
+
     // Tomar el primer slot libre
     slot = primer_slot_libre_enemigo;
     primer_slot_libre_enemigo = bala_enemigo[slot].siguiente;  // Avanzar la lista de libres
-    
+
     // Inicializar la bala
     bala_enemigo[slot].x = pos_x;
     bala_enemigo[slot].y = pos_y;
@@ -446,7 +476,7 @@ BEGIN
     bala_enemigo[slot].activo = 1;
     bala_enemigo[slot].angulo = ang;
     bala_enemigo[slot].draw_id = 0;
-    
+
     // OPTIMIZACIÓN: Precalcular deltas de movimiento según tipo
     IF (tipo_bala == TIPO_BALA_ENEMIGA1)
         bala_enemigo[slot].dx = 0;
@@ -455,7 +485,7 @@ BEGIN
         bala_enemigo[slot].dx = get_distx(ang, VEL_BALA_ENEMIGA2);
         bala_enemigo[slot].dy = get_disty(ang, VEL_BALA_ENEMIGA2);
     END
-    
+
     // OPTIMIZACIÓN: Precalcular tamaño y color según tipo
     IF (tipo_bala == TIPO_BALA_ENEMIGA1)
         bala_enemigo[slot].tamano = TAMANO_BALA_ENEMIGA1;
@@ -464,11 +494,11 @@ BEGIN
         bala_enemigo[slot].tamano = TAMANO_BALA_ENEMIGA2;
         bala_enemigo[slot].color = COLOR_ENEMIGO2;
     END
-    
+
     // Añadir a la lista de balas activas (al principio)
     bala_enemigo[slot].siguiente = primera_bala_enemigo_activa;
     primera_bala_enemigo_activa = slot;
-    
+
     RETURN(slot);  // Retornar el índice
 END
 
@@ -493,12 +523,12 @@ BEGIN
         // PROCESAR BALAS DEL JUGADOR
         anterior = -1;
         actual = primera_bala_jugador_activa;
-        
+
         WHILE (actual != -1)
             // Guardar el siguiente antes de posibles modificaciones
             siguiente = bala_jugador[actual].siguiente;
             debe_eliminar = 0;
-            
+
             IF (bala_jugador[actual].draw_id != 0)
                 delete_draw(bala_jugador[actual].draw_id);
                 bala_jugador[actual].draw_id = 0;
@@ -507,9 +537,12 @@ BEGIN
             // Mover la bala según deltas precalculados
             bala_jugador[actual].x += bala_jugador[actual].dx;
             bala_jugador[actual].y += bala_jugador[actual].dy;
-            
-            // Verificar si sale de pantalla
-            IF (bala_jugador[actual].y < 0 OR bala_jugador[actual].y > ALTO_PANTALLA OR bala_jugador[actual].x < 0 OR bala_jugador[actual].x > ANCHO_PANTALLA)
+
+            // Verificar si sale del área visible del scroll (eliminar balas fuera de pantalla)
+            IF (bala_jugador[actual].y < scroll.y0 - MARGEN_VISIBLE_ARRIBA OR
+                bala_jugador[actual].y > scroll.y0 + ALTO_PANTALLA + MARGEN_VISIBLE_ABAJO OR
+                bala_jugador[actual].x < 0 OR
+                bala_jugador[actual].x > ANCHO_PANTALLA)
                 debe_eliminar = 1;
             ELSE
                 // Colisión con enemigos
@@ -528,7 +561,7 @@ BEGIN
                     debe_eliminar = 1;
                 END
             END
-            
+
             // Eliminar bala de la lista si es necesario
             IF (debe_eliminar == 1)
                 // Sacar de lista de activas
@@ -537,21 +570,25 @@ BEGIN
                 ELSE
                     bala_jugador[anterior].siguiente = siguiente;
                 END
-                
+
                 // Marcar como inactiva
                 bala_jugador[actual].activo = 0;
-                
+
                 // Devolver a lista de libres
                 bala_jugador[actual].siguiente = primer_slot_libre_jugador;
                 primer_slot_libre_jugador = actual;
             ELSE
-                // Dibujar la bala
-                bala_jugador[actual].draw_id = draw(TIPO_DIBUJO_CIRCULO_RELLENO, bala_jugador[actual].color, OPACIDAD_DRAW, REGION_DRAW, bala_jugador[actual].x - bala_jugador[actual].tamano, bala_jugador[actual].y - bala_jugador[actual].tamano, bala_jugador[actual].x + bala_jugador[actual].tamano, bala_jugador[actual].y + bala_jugador[actual].tamano);
-                
+                // Dibujar la bala (convertir coordenadas de mapa a pantalla)
+                bala_jugador[actual].draw_id = draw(TIPO_DIBUJO_CIRCULO_RELLENO, bala_jugador[actual].color, OPACIDAD_DRAW, REGION_DRAW,
+                    (bala_jugador[actual].x - scroll.x0) - bala_jugador[actual].tamano,
+                    (bala_jugador[actual].y - scroll.y0) - bala_jugador[actual].tamano,
+                    (bala_jugador[actual].x - scroll.x0) + bala_jugador[actual].tamano,
+                    (bala_jugador[actual].y - scroll.y0) + bala_jugador[actual].tamano);
+
                 // Avanzar anterior solo si no eliminamos
                 anterior = actual;
             END
-            
+
             // Avanzar al siguiente
             actual = siguiente;
         END
@@ -583,12 +620,12 @@ BEGIN
         // PROCESAR BALAS ENEMIGAS
         anterior = -1;
         actual = primera_bala_enemigo_activa;
-        
+
         WHILE (actual != -1)
             // Guardar el siguiente antes de posibles modificaciones
             siguiente = bala_enemigo[actual].siguiente;
             debe_eliminar = 0;
-            
+
             IF (bala_enemigo[actual].draw_id != 0)
                 delete_draw(bala_enemigo[actual].draw_id);
                 bala_enemigo[actual].draw_id = 0;
@@ -597,9 +634,12 @@ BEGIN
             // Mover la bala según deltas precalculados
             bala_enemigo[actual].x += bala_enemigo[actual].dx;
             bala_enemigo[actual].y += bala_enemigo[actual].dy;
-            
-            // Verificar si sale de pantalla
-            IF (bala_enemigo[actual].y < 0 OR bala_enemigo[actual].y > ALTO_PANTALLA OR bala_enemigo[actual].x < 0 OR bala_enemigo[actual].x > ANCHO_PANTALLA)
+
+            // Verificar si sale del área visible del scroll (eliminar balas fuera de pantalla)
+            IF (bala_enemigo[actual].y < scroll.y0 - MARGEN_VISIBLE_ARRIBA OR
+                bala_enemigo[actual].y > scroll.y0 + ALTO_PANTALLA + MARGEN_VISIBLE_ABAJO OR
+                bala_enemigo[actual].x < 0 OR
+                bala_enemigo[actual].x > ANCHO_PANTALLA)
                 debe_eliminar = 1;
             ELSE
                 // Colisión con jugador
@@ -618,7 +658,7 @@ BEGIN
                     END
                 END
             END
-            
+
             // Eliminar bala de la lista si es necesario
             IF (debe_eliminar == 1)
                 // Sacar de lista de activas
@@ -627,21 +667,25 @@ BEGIN
                 ELSE
                     bala_enemigo[anterior].siguiente = siguiente;
                 END
-                
+
                 // Marcar como inactiva
                 bala_enemigo[actual].activo = 0;
-                
+
                 // Devolver a lista de libres
                 bala_enemigo[actual].siguiente = primer_slot_libre_enemigo;
                 primer_slot_libre_enemigo = actual;
             ELSE
-                // Dibujar la bala
-                bala_enemigo[actual].draw_id = draw(TIPO_DIBUJO_CIRCULO_RELLENO, bala_enemigo[actual].color, OPACIDAD_DRAW, REGION_DRAW, bala_enemigo[actual].x - bala_enemigo[actual].tamano, bala_enemigo[actual].y - bala_enemigo[actual].tamano, bala_enemigo[actual].x + bala_enemigo[actual].tamano, bala_enemigo[actual].y + bala_enemigo[actual].tamano);
-                
+                // Dibujar la bala (convertir coordenadas de mapa a pantalla)
+                bala_enemigo[actual].draw_id = draw(TIPO_DIBUJO_CIRCULO_RELLENO, bala_enemigo[actual].color, OPACIDAD_DRAW, REGION_DRAW,
+                    (bala_enemigo[actual].x - scroll.x0) - bala_enemigo[actual].tamano,
+                    (bala_enemigo[actual].y - scroll.y0) - bala_enemigo[actual].tamano,
+                    (bala_enemigo[actual].x - scroll.x0) + bala_enemigo[actual].tamano,
+                    (bala_enemigo[actual].y - scroll.y0) + bala_enemigo[actual].tamano);
+
                 // Avanzar anterior solo si no eliminamos
                 anterior = actual;
             END
-            
+
             // Avanzar al siguiente
             actual = siguiente;
         END
@@ -650,50 +694,115 @@ BEGIN
     END
 END
 
-// Función: crear_enemigos
-// Descripción: Inicializa el STRUCT de enemigos al inicio de cada nivel.
-// - Genera 5 enemigos tipo 1 (a la izquierda) y 5 tipo 2 (a la derecha) en el array STRUCT.
+//------------------------------------------------------------------------------
+// FUNCIÓN: actualizar_scroll
+// DESCRIPCIÓN: Actualiza la posición del scroll de forma automática hacia arriba.
+//              El scroll se mueve desde la parte inferior del mapa (y=1536) hacia
+//              arriba (y=0) a velocidad de 1 pixel cada 3 frames.
+//------------------------------------------------------------------------------
+FUNCTION actualizar_scroll()
+BEGIN
+    // Mover el scroll hacia arriba automáticamente (1 pixel cada 3 frames)
+    IF (scroll_y_objetivo > 0)
+        contador_scroll++;
+        IF (contador_scroll >= 3)
+            scroll_y_objetivo = scroll_y_objetivo - VELOCIDAD_SCROLL;
+            IF (scroll_y_objetivo < 0)
+                scroll_y_objetivo = 0;
+            END
+            contador_scroll = 0;
+        END
+    END
+
+    // Actualizar la posición del scroll
+    scroll.y0 = scroll_y_objetivo;
+END
+
+//------------------------------------------------------------------------------
+// FUNCIÓN: crear_enemigos (MODIFICADA PARA SCROLL)
+// DESCRIPCIÓN: Inicializa el STRUCT de enemigos al inicio de cada nivel.
+//              Ahora distribuye 80 enemigos por todo el mapa de 1536 píxeles de forma escalonada.
+//              Distribución: pocos enemigos al principio, más conforme nos acercamos al final.
+//------------------------------------------------------------------------------
 PROCESS crear_enemigos();
 PRIVATE
     i;  // Variable para el bucle
     j;  // Variable para inicializar draws
+    tipo_enemigo;  // Tipo aleatorio de enemigo
+    zona_y_min;  // Y mínima de la zona de spawneo
+    zona_y_max;  // Y máxima de la zona de spawneo
+    probabilidad_spawn; // Probabilidad de spawn en la zona (0-100)
 BEGIN
-    // Crea 5 enemigos tipo 1 en posiciones espaciadas en la izquierda
-    FROM i=0 TO 4;
-        enemigo[i].x = ESPACIADO_ENEMIGO1_X + i * ESPACIADO_ENEMIGO1_X;
-        enemigo[i].y = ESPACIADO_ENEMIGO1_Y_INICIAL + i * ESPACIADO_ENEMIGO1_Y;
-        enemigo[i].tipo = 1;
-        enemigo[i].activo = 1;
-        enemigo[i].dir = 1;
-        enemigo[i].ang = 0;
-    END
+    // Crear 80 enemigos repartidos por todo el mapa de forma escalonada
+    // Dividimos el mapa en zonas y aumentamos la densidad de enemigos conforme bajamos
+    FROM i=0 TO NUM_ENEMIGOS_INICIAL - 1;
+        // Posición X aleatoria dentro de los márgenes de la pantalla
+        enemigo[i].x = MARGEN_LATERAL + rand(0, ANCHO_PANTALLA - (MARGEN_LATERAL * 2));
 
-    // Crea 5 enemigos tipo 2 en posiciones espaciadas en la derecha
-    FROM i=5 TO 9;
-        enemigo[i].x = ESPACIADO_ENEMIGO2_X_INICIAL + (i-5) * ESPACIADO_ENEMIGO2_X;
-        enemigo[i].y = ESPACIADO_ENEMIGO2_Y_INICIAL + (i-5) * ESPACIADO_ENEMIGO2_Y;
-        enemigo[i].tipo = 2;
+        // Distribución escalonada por Y:
+        // - Zona alta (0-Y_LIMITE_ZONA_ALTA): ENEMIGOS_ZONA_ALTA enemigos
+        // - Zona media-alta (Y_LIMITE_ZONA_ALTA-Y_LIMITE_ZONA_MEDIA_ALTA): ENEMIGOS_ZONA_MEDIA_ALTA enemigos
+        // - Zona media (Y_LIMITE_ZONA_MEDIA_ALTA-Y_LIMITE_ZONA_MEDIA): ENEMIGOS_ZONA_MEDIA enemigos
+        // - Zona baja (Y_LIMITE_ZONA_MEDIA-ALTO_MAPA-MARGEN): ENEMIGOS_ZONA_BAJA enemigos
+        
+        IF (i < ENEMIGOS_ZONA_ALTA)  // Primeros ENEMIGOS_ZONA_ALTA enemigos en zona alta (más difícil, menos enemigos)
+            zona_y_min = MARGEN_SUPERIOR;
+            zona_y_max = Y_LIMITE_ZONA_ALTA;
+        ELSE
+            IF (i < ENEMIGOS_ZONA_ALTA + ENEMIGOS_ZONA_MEDIA_ALTA)  // Siguientes ENEMIGOS_ZONA_MEDIA_ALTA enemigos en zona media-alta
+                zona_y_min = Y_LIMITE_ZONA_ALTA;
+                zona_y_max = Y_LIMITE_ZONA_MEDIA_ALTA;
+            ELSE
+                IF (i < ENEMIGOS_ZONA_ALTA + ENEMIGOS_ZONA_MEDIA_ALTA + ENEMIGOS_ZONA_MEDIA)  // Siguientes ENEMIGOS_ZONA_MEDIA enemigos en zona media (más densidad)
+                    zona_y_min = Y_LIMITE_ZONA_MEDIA_ALTA;
+                    zona_y_max = Y_LIMITE_ZONA_MEDIA;
+                ELSE  // Últimos ENEMIGOS_ZONA_BAJA enemigos en zona baja (cerca del inicio pero no muy cerca)
+                    zona_y_min = Y_LIMITE_ZONA_MEDIA;
+                    zona_y_max = ALTO_MAPA - MARGEN_CORTESIA_INICIAL;
+                END
+            END
+        END
+        
+        enemigo[i].y = rand(zona_y_min, zona_y_max);
+
+        // Tipo aleatorio de enemigo (1 o 2)
+        tipo_enemigo = rand(1, 2);
+        enemigo[i].tipo = tipo_enemigo;
+
+        // Marcar como activo
         enemigo[i].activo = 1;
-        enemigo[i].dir = 0;
+
+        // Dirección inicial
+        IF (tipo_enemigo == 1)
+            enemigo[i].dir = 1;  // Tipo 1: dirección 1
+        ELSE
+            enemigo[i].dir = 0;  // Tipo 2: dirección 0
+        END
+
+        // Ángulo inicial
         enemigo[i].ang = 0;
+
+        // No necesitamos inicializar array de dibujos (ya no se usa)
     END
 
     // OPTIMIZACIÓN: Construir lista enlazada de enemigos activos
     primera_enemigo_activo = 0;
-    FOR (i=0; i<9; i++)
+    FOR (i=0; i<NUM_ENEMIGOS_INICIAL-1; i++)
         enemigo[i].siguiente = i + 1;
     END
-    enemigo[9].siguiente = -1; // Fin de lista
+    enemigo[NUM_ENEMIGOS_INICIAL-1].siguiente = -1; // Fin de lista
 
     // Crear el proceso único de enemigos
     proceso_enemigos();
 END
 
-// Proceso: jugador
-// Descripción: Controla la nave del jugador.
-// - Maneja el dibujo, movimientos, disparos y colisiones en un bucle continuo.
-// - Se detiene si el juego termina (game_over).
-// Ahora usa sprites desde FPG en lugar de draw()
+//------------------------------------------------------------------------------
+// PROCESS: jugador (MODIFICADO PARA SCROLL)
+// DESCRIPCIÓN: Controla la nave del jugador.
+//              - Maneja el dibujo, movimientos, disparos y colisiones en un bucle continuo.
+//              - Se detiene si el juego termina (game_over).
+//              - Ahora usa ctype=c_scroll para moverse dentro del sistema de scroll.
+//------------------------------------------------------------------------------
 PROCESS jugador();
 PRIVATE
     vel = VEL_JUGADOR;  // Velocidad de movimiento de la nave
@@ -703,9 +812,12 @@ PRIVATE
     dir_y = 0;             // Dirección de movimiento (-1, 0, 1)
     grafico_actual = 1;    // Gráfico actual a mostrar
 BEGIN
-    // Posición inicial de la nave en el centro inferior de la pantalla
+    // Configurar el proceso como scrollable
+    ctype = c_scroll;
+
+    // Posición inicial de la nave en el centro inferior del MAPA (coordenadas de scroll)
     x = CENTRO_X;  // Posición inicial x en el centro
-    y = ALTO_PANTALLA - 20;  // Posición inicial y cerca del fondo
+    y = ALTO_MAPA - 20;  // Posición inicial y cerca del fondo del mapa
     file = FPG_PLAYER;
     graph = 1;
     z = -10;  // Asegurar que el jugador esté sobre el fondo
@@ -735,19 +847,11 @@ BEGIN
     END
 END
 
-// Función: manejar_controles_jugador
-// Descripción: Maneja el movimiento de la nave del jugador según las teclas de flecha, respetando los límites de la pantalla.
-// Parámetros:
-//   - x_offset: Puntero a la posición x de la nave. -> Usamos el puntero para modificar la variable original.
-//   - y_offset: Puntero a la posición y de la nave. -> Usamos el puntero para modificar la variable original.
-//   - dir_x_offset: Puntero a la dirección x. -> Usamos el puntero para modificar la variable original.
-//   - dir_y_offset: Puntero a la dirección y. -> Usamos el puntero para modificar la variable original.
-//   - vel: Velocidad de movimiento (por valor, ya que no se modifica).
-// Los punteros sirven para modificar las variables originales fuera de la función.
-// - Si modificas una varariable del puntero dentro de la función, se refleja fuera también.
-// - Sirve para evitar el uso de variables globales innecesarias.
-// Los PROCESS se ejecutan en paralelo, mientras que las FUNCTION se ejecutan de forma secuencial
-// - Es decir, hasta que no termine esta función, el proceso que lo llama queda bloqueado
+//------------------------------------------------------------------------------
+// FUNCIÓN: manejar_controles_jugador (MODIFICADA PARA SCROLL)
+// DESCRIPCIÓN: Maneja el movimiento de la nave del jugador según las teclas de flecha.
+//              Ahora usa coordenadas de scroll (mapa) en lugar de coordenadas de pantalla.
+//------------------------------------------------------------------------------
 FUNCTION manejar_controles_jugador(INT x_offset, INT y_offset, INT dir_x_offset, INT dir_y_offset, INT vel);
 BEGIN
     // Resetear dirección
@@ -767,16 +871,31 @@ BEGIN
         *dir_x_offset = 1;
     END
 
-    // Mover arriba si se presiona la flecha arriba y no se sale de la pantalla
+    // Mover arriba si se presiona la flecha arriba y no se sale del mapa
     IF (key(_up) AND *y_offset > TAMANO_NAVE_Y_ALTURA)
         *y_offset -= vel;
         *dir_y_offset = -1;
     END
 
-    // Mover abajo si se presiona la flecha abajo y no se sale de la pantalla
-    IF (key(_down) AND *y_offset < ALTO_PANTALLA - TAMANO_NAVE_Y_BASE)
+    // Mover abajo si se presiona la flecha abajo y no pasa el límite inferior visible
+    // El jugador no puede bajar más allá de scroll.y0 + ALTO_PANTALLA - MARGEN_INFERIOR_JUGADOR
+    IF (key(_down) AND *y_offset < scroll.y0 + ALTO_PANTALLA - MARGEN_INFERIOR_JUGADOR)
         *y_offset += vel;
         *dir_y_offset = 1;
+    END
+
+    // Auto-desplazamiento: el jugador sube automáticamente con el scroll (1 pixel cada 3 frames)
+    // Solo si no está presionando abajo (para permitir quedarse quieto respecto al scroll)
+    // Y solo si el scroll no ha llegado al tope (scroll.y0 > 0)
+    IF (NOT key(_down) AND scroll.y0 > 0)
+        IF (contador_scroll == 0)  // Sincronizar con el movimiento del scroll
+            *y_offset -= VELOCIDAD_SCROLL;
+        END
+    END
+
+    // Verificar que no se salga del límite inferior visible
+    IF (*y_offset > scroll.y0 + ALTO_PANTALLA - MARGEN_INFERIOR_JUGADOR)
+        *y_offset = scroll.y0 + ALTO_PANTALLA - MARGEN_INFERIOR_JUGADOR;
     END
 END
 
@@ -955,7 +1074,7 @@ PRIVATE
 BEGIN
     anterior = -1;
     actual = primera_enemigo_activo;
-    
+
     WHILE (actual != -1)
         IF (actual == index)
             // Encontrado, remover
@@ -973,70 +1092,139 @@ BEGIN
     END
 END
 
-// Proceso: proceso_enemigos
-// Descripción: Controla el comportamiento de todos los enemigos usando un STRUCT array.
-// - Maneja movimiento, disparos y eliminación de enemigos tipo 1 y 2.
-// (OPTIMIZACIÓN: Proceso genérico para ambos tipos de enemigos.
-// Reduce duplicación de código. Usa parámetro 'tipo' para diferenciar comportamiento.
-// Mejora mantenibilidad: cambios en un lugar afectan a ambos tipos.)
+//------------------------------------------------------------------------------
+// PROCESS: proceso_enemigos (MODIFICADO PARA SCROLL)
+// DESCRIPCIÓN: Controla el comportamiento de todos los enemigos usando un STRUCT array.
+//              Maneja movimiento, disparos y eliminación de enemigos tipo 1 y 2.
+//              Ahora solo procesa y dibuja enemigos visibles en la pantalla actual del scroll.
+//              Usa procesos hijos con ctype=c_screen para visualizar cada enemigo.
+//------------------------------------------------------------------------------
 PROCESS proceso_enemigos();
 PRIVATE
     INT i, j;
-    INT tiempo_disparo[10];  // Contador de tiempo para disparos de cada enemigo
+    INT tiempo_disparo[NUM_ENEMIGOS_INICIAL];  // Contador de tiempo para disparos de cada enemigo
+    INT enemigo_visible;     // Flag para verificar si el enemigo está visible
+    INT procesos_enemigo[NUM_ENEMIGOS_INICIAL]; // IDs de procesos hijos para cada enemigo
 BEGIN
+    // Inicializar array de procesos
+    FROM i=0 TO NUM_ENEMIGOS_INICIAL - 1;
+        procesos_enemigo[i] = 0;
+    END
+
     LOOP
         // Si el juego ha terminado, salimos del proceso
-        IF (game_over == 1) RETURN; END
+        IF (game_over == 1)
+            // Terminar todos los procesos hijos
+            FOR (i=0; i<NUM_ENEMIGOS_INICIAL; i++)
+                IF (procesos_enemigo[i] != 0)
+                    signal(procesos_enemigo[i], s_kill);
+                    procesos_enemigo[i] = 0;
+                END
+            END
+            RETURN;
+        END
 
         // Por cada enemigo
-        FOR (i=0; i<10; i++)
+        FOR (i=0; i<NUM_ENEMIGOS_INICIAL; i++)
             // Verificamos si está vivo
             IF (enemigo[i].activo == 1)
-                // Verificamos si los controles están activos (p. ej., no durante la cuenta regresiva)
-                IF (controles_activos == 1)
-                    // Movemos en función del tipo
-                    IF (enemigo[i].tipo == 1)
-                        // Movemos el enemigo tipo 1
-                        mover_enemigo_tipo1(&enemigo[i].x, &enemigo[i].y, &enemigo[i].dir);
-                    ELSE
-                        // Movemos el enemigo tipo 2
-                        mover_enemigo_tipo2(&enemigo[i].x, &enemigo[i].y, &enemigo[i].ang);
+                // OPTIMIZACIÓN: Solo procesar enemigos visibles en el scroll actual
+                // Un enemigo es visible si su Y está entre scroll.y0 - MARGEN y scroll.y0 + ALTO_PANTALLA + MARGEN
+                enemigo_visible = 0;
+                IF (enemigo[i].y >= scroll.y0 - MARGEN_VISIBLE_ARRIBA AND enemigo[i].y <= scroll.y0 + ALTO_PANTALLA + MARGEN_VISIBLE_ABAJO)
+                    enemigo_visible = 1;
+                END
+
+                // Solo procesar si está visible
+                IF (enemigo_visible == 1)
+                    // Crear proceso hijo si no existe
+                    IF (procesos_enemigo[i] == 0)
+                        procesos_enemigo[i] = proceso_enemigo_visual(i);
                     END
 
-                    // Verificar si sale de pantalla
-                    IF (enemigo[i].tipo == 1 AND enemigo[i].y > ALTO_PANTALLA + TAMANO_ENEMIGO1)
-                        enemigo[i].activo = 0;
-                        remover_enemigo_lista(i);
-                        enemigos_vivos--;
-                    END
-
-                    // Dibujar enemigo con put() o xput() según su tipo
-                    IF (enemigo[i].tipo == 1)
-                        // Usar xput para rotar según dirección de movimiento
-                        IF (enemigo[i].dir == 1)
-                            xput(FPG_LEVEL, GRAFICO_ENEMIGO1, enemigo[i].x, enemigo[i].y, ANGULO_ROTACION_ENEMIGO, ESCALA_ENEMIGO, CENTRO_XPUT, CENTRO_YPUT);  // Rotar 15° a la derecha
+                    // Solo mover y disparar si los controles están activos
+                    IF (controles_activos == 1)
+                        // Movemos en función del tipo
+                        IF (enemigo[i].tipo == 1)
+                            // Movemos el enemigo tipo 1
+                            mover_enemigo_tipo1(&enemigo[i].x, &enemigo[i].y, &enemigo[i].dir);
                         ELSE
-                            xput(FPG_LEVEL, GRAFICO_ENEMIGO1, enemigo[i].x, enemigo[i].y, ANGULO_ROTACION_ENEMIGO_OPUESTA, ESCALA_ENEMIGO, CENTRO_XPUT, CENTRO_YPUT);  // Rotar 15° a la izquierda
+                            // Movemos el enemigo tipo 2
+                            mover_enemigo_tipo2(&enemigo[i].x, &enemigo[i].y, &enemigo[i].ang);
                         END
-                    ELSE
-                        put(FPG_LEVEL, GRAFICO_ENEMIGO2, enemigo[i].x, enemigo[i].y);  // Gráfico para tipo 2
-                    END
 
-                    // Disparar en función del tipo
-                    IF (enemigo[i].tipo == 1)
-                        disparar_enemigo_tipo1(&tiempo_disparo[i], enemigo[i].x, enemigo[i].y);
-                    ELSE
-                        disparar_enemigo_tipo2(&tiempo_disparo[i], enemigo[i].x, enemigo[i].y);
+                        // Verificar si sale del mapa por abajo
+                        IF (enemigo[i].tipo == 1 AND enemigo[i].y > ALTO_MAPA + TAMANO_ENEMIGO1)
+                            enemigo[i].activo = 0;
+                            remover_enemigo_lista(i);
+                            enemigos_vivos--;
+                        END
+
+                        // Disparar en función del tipo
+                        IF (enemigo[i].tipo == 1)
+                            disparar_enemigo_tipo1(&tiempo_disparo[i], enemigo[i].x, enemigo[i].y);
+                        ELSE
+                            disparar_enemigo_tipo2(&tiempo_disparo[i], enemigo[i].x, enemigo[i].y);
+                        END
                     END
+                ELSE
+                    // Enemigo no visible, eliminar proceso hijo si existe
+                    IF (procesos_enemigo[i] != 0)
+                        signal(procesos_enemigo[i], s_kill);
+                        procesos_enemigo[i] = 0;
+                    END
+                END
+            ELSE
+                // Enemigo muerto, eliminar proceso hijo si existe
+                IF (procesos_enemigo[i] != 0)
+                    signal(procesos_enemigo[i], s_kill);
+                    procesos_enemigo[i] = 0;
                 END
             END
         END
 
         FRAME;
-        
-        // Limpiar pantalla y redibujar fondo para el siguiente frame
-        clear_screen();
-        put_screen(FPG_LEVEL, 1);
+    END
+END
+
+//------------------------------------------------------------------------------
+// PROCESS: proceso_enemigo_visual (NUEVO)
+// DESCRIPCIÓN: Proceso hijo liviano que solo se encarga de visualizar un enemigo.
+//              Usa ctype=c_screen para coordenadas de pantalla.
+//              Lee los datos del enemigo desde el struct enemigo[].
+//------------------------------------------------------------------------------
+PROCESS proceso_enemigo_visual(INT index);
+BEGIN
+    ctype = c_screen;  // Usar coordenadas de pantalla
+    file = FPG_LEVEL;  // Archivo de gráficos
+
+    LOOP
+        // Si el enemigo ya no está activo o el juego terminó, salir
+        IF (enemigo[index].activo == 0 OR game_over == 1)
+            RETURN;
+        END
+
+        // Actualizar posición en pantalla (convertir de coordenadas de mapa a pantalla)
+        x = enemigo[index].x - scroll.x0;
+        y = enemigo[index].y - scroll.y0;
+
+        // Actualizar gráfico según tipo
+        IF (enemigo[index].tipo == 1)
+            graph = GRAFICO_ENEMIGO1;
+            // Rotar según dirección de movimiento
+            IF (enemigo[index].dir == 1)
+                angle = ANGULO_ROTACION_ENEMIGO;  // Rotar 15° a la derecha
+            ELSE
+                angle = ANGULO_ROTACION_ENEMIGO_OPUESTA;  // Rotar 15° a la izquierda
+            END
+            size = ESCALA_ENEMIGO;
+        ELSE
+            graph = GRAFICO_ENEMIGO2;
+            angle = 0;
+            size = 100;
+        END
+
+        FRAME;
     END
 END
 
@@ -1057,7 +1245,7 @@ BEGIN
     *x_offset += *dir_offset * VEL_ENEMIGO1_HORIZONTAL;
     // Si llega a los bordes, cambiamos dirección y lo hacemos bajar un poco
     IF (*x_offset > ANCHO_PANTALLA - (TAMANO_ENEMIGO1 + DISTANCIA_COLISION) OR *x_offset < TAMANO_ENEMIGO1 + DISTANCIA_COLISION)
-        *dir_offset = -*dir_offset;     // Cambiamos dirección  
+        *dir_offset = -*dir_offset;     // Cambiamos dirección
         *y_offset += DESCENSO_ENEMIGO1; // Descendemos
     END
 END
@@ -1108,14 +1296,13 @@ BEGIN
     // Si no lo comprobamos, tendríamos una excepción en el primer FRAME y el juego se colgaría
     IF (*box_offset != 0) delete_draw(*box_offset); END
     IF (*circulo_offset != 0) delete_draw(*circulo_offset); END
- 
+
     // Dibujamos el enemigo
     *box_offset = draw(3, COLOR_ENEMIGO1, OPACIDAD_DRAW, REGION_DRAW, x - TAMANO_ENEMIGO1, y - TAMANO_ENEMIGO1, x + TAMANO_ENEMIGO1, y + TAMANO_ENEMIGO1);
     *circulo_offset = draw(TIPO_DIBUJO_CIRCULO_RELLENO, COLOR_ENEMIGO1_CIRCULO, OPACIDAD_DRAW, REGION_DRAW, x - TAMANO_ENEMIGO1_CIRCULO, y - TAMANO_ENEMIGO1_CIRCULO, x + TAMANO_ENEMIGO1_CIRCULO, y + TAMANO_ENEMIGO1_CIRCULO);
 END
 
-// Función: mover_enemigo_tipo2
-// Descripción: Maneja el movimiento circular del enemigo tipo 2, manteniéndolo dentro de la pantalla.
+// Descripción: Maneja el movimiento circular del enemigo tipo 2, manteniéndolo dentro del mapa.
 // Parámetros:
 //   - x_offset: Puntero a la posición x. -> Usamos el puntero para modificar la variable original.
 //   - y_offset: Puntero a la posición y. -> Usamos el puntero para modificar la variable original.
@@ -1132,7 +1319,7 @@ BEGIN
     *x_offset += get_distx(*ang_offset, RADIO_MOVIMIENTO_ENEMIGO2);
     *y_offset += get_disty(*ang_offset, RADIO_MOVIMIENTO_ENEMIGO2);
     
-    // Verificamos que no salgamos de los límites de la pantalla
+    // Verificamos que no salgamos de los límites HORIZONTALES (ancho de pantalla, no del mapa)
     IF (*x_offset < TAMANO_ENEMIGO2_LINEA + TAMANO_ENEMIGO2_CIRCULO)
          *x_offset = TAMANO_ENEMIGO2_LINEA + TAMANO_ENEMIGO2_CIRCULO;
     ELSE
@@ -1140,11 +1327,13 @@ BEGIN
             *x_offset = ANCHO_PANTALLA - (TAMANO_ENEMIGO2_LINEA + TAMANO_ENEMIGO2_CIRCULO);
         END
     END
+    
+    // Verificamos que no salgamos de los límites VERTICALES (altura del mapa, NO de la pantalla)
     IF (*y_offset < TAMANO_ENEMIGO2_LINEA + TAMANO_ENEMIGO2_CIRCULO)
         *y_offset = TAMANO_ENEMIGO2_LINEA + TAMANO_ENEMIGO2_CIRCULO;
     ELSE
-        IF (*y_offset > ALTO_PANTALLA - (TAMANO_ENEMIGO2_LINEA + TAMANO_ENEMIGO2_CIRCULO))
-            *y_offset = ALTO_PANTALLA - (TAMANO_ENEMIGO2_LINEA + TAMANO_ENEMIGO2_CIRCULO);
+        IF (*y_offset > ALTO_MAPA - (TAMANO_ENEMIGO2_LINEA + TAMANO_ENEMIGO2_CIRCULO))
+            *y_offset = ALTO_MAPA - (TAMANO_ENEMIGO2_LINEA + TAMANO_ENEMIGO2_CIRCULO);
         END
     END
 END
@@ -1234,11 +1423,17 @@ PRIVATE
     i;                                  // Contador para el bucle
     radio = RADIO_INICIAL_EXPLOSION;    // Radio inicial del círculo
     exp_draw;                           // ID del dibujo de la explosión
+    pantalla_x;                         // Coordenada X de pantalla
+    pantalla_y;                         // Coordenada Y de pantalla
 BEGIN
     // Animamos la explosión con círculos crecientes
     FROM i=0 TO 9; // Animación de 9 frames
+        // Convertir coordenadas de mapa a pantalla
+        pantalla_x = x - scroll.x0;
+        pantalla_y = y - scroll.y0;
+        
         IF (exp_draw != 0) delete_draw(exp_draw); END  // Borramos dibujo anterior, si existe
-        exp_draw = draw(TIPO_DIBUJO_CIRCULO_RELLENO, color, OPACIDAD_DRAW, REGION_DRAW, x - radio, y - radio, x + radio, y + radio);  // Dibujamos un círculo
+        exp_draw = draw(TIPO_DIBUJO_CIRCULO_RELLENO, color, OPACIDAD_DRAW, REGION_DRAW, pantalla_x - radio, pantalla_y - radio, pantalla_x + radio, pantalla_y + radio);  // Dibujamos un círculo
         radio += INCREMENTO_RADIO_EXPLOSION;  // Augmentamos radio
         FRAME;  // Esperamos al siguiente frame
     END
@@ -1261,15 +1456,21 @@ PRIVATE
     i;  // Contador para el bucle
     radio = 3;  // Radio inicial más pequeño
     exp_draw;  // ID del dibujo de la explosión
+    pantalla_x;  // Coordenada X de pantalla
+    pantalla_y;  // Coordenada Y de pantalla
 BEGIN
     // Animamos la explosión pequeña
     FROM i=0 TO ITERACIONES_EXPLOSION_PEQUENA;  // Menos iteraciones para que sea más rápida
-        IF (exp_draw != 0) delete_draw(exp_draw); END
-        exp_draw = draw(TIPO_DIBUJO_CIRCULO_RELLENO, color, OPACIDAD_DRAW, REGION_DRAW, x - radio, y - radio, x + radio, y + radio);
+        // Convertir coordenadas de mapa a pantalla
+        pantalla_x = x - scroll.x0;
+        pantalla_y = y - scroll.y0;
+        exp_draw = draw(TIPO_DIBUJO_CIRCULO_RELLENO, color, OPACIDAD_DRAW, REGION_DRAW, pantalla_x - radio, pantalla_y - radio, pantalla_x + radio, pantalla_y + radio);
         radio++;  // Incremento menor
         FRAME;
+        IF (exp_draw != 0)
+            delete_draw(exp_draw);
+        END
     END
-    delete_draw(exp_draw);
 END
 
 // Función: cuenta_regresiva (OPTIMIZACIÓN: Función genérica para cuentas regresivas.
@@ -1373,13 +1574,13 @@ BEGIN
     END
 END
 
-// Función: inicio_nivel (MODIFICADA)
-// Descripción: Inicializa un nuevo nivel mostrando una cuenta regresiva (3, 2, 1, GO!) y creando los procesos de enemigos y jugador.
-// - Desactiva controles durante la cuenta y los activa al final.
-// - Ahora inicializa el sistema de balas y arranca el proceso_balas
-// Los PROCESS se ejecutan en paralelo, mientras que las FUNCTION se ejecutan de forma secuencial
-// - Aunque tenga FRAME dentro, es una función y bloquea el proceso que la llama (hack de DIV)
-// - Es decir, hasta que no termine esta función, el proceso que lo llama queda bloqueado
+//------------------------------------------------------------------------------
+// FUNCIÓN: inicio_nivel (MODIFICADA PARA SCROLL)
+// DESCRIPCIÓN: Inicializa un nuevo nivel mostrando una cuenta regresiva (3, 2, 1, GO!) y creando los procesos de enemigos y jugador.
+//              - Desactiva controles durante la cuenta y los activa al final.
+//              - Ahora inicializa el sistema de balas y arranca el proceso_balas
+//              - Configura el sistema de scroll vertical
+//------------------------------------------------------------------------------
 FUNCTION inicio_nivel();
 PRIVATE
     INT contador;   // Cuenta regresiva: 3, 2, 1, GO!
@@ -1400,6 +1601,23 @@ BEGIN
     // Inicializar el sistema de balas
     inicializar_balas_jugador();
     inicializar_balas_enemigo();
+
+    // CONFIGURAR SCROLL VERTICAL
+    // Inicializar el sistema de scroll
+    // El scroll cubre toda la pantalla (region 0)
+    // El mapa tiene 1536px de altura, empezamos desde abajo
+    // Número de scroll (0-9)
+    // FPG del mapa
+    // Gráfico del mapa
+    // Gráfico de fondo
+    // Region (0=pantalla completa)
+    // Flags (1=LOCK_SCROLL, scroll bloqueado, se mueve manualmente)
+    start_scroll(0, FPG_LEVEL, 1, 0, 0, 1);                   
+    
+    // Posicionar el scroll en la parte inferior del mapa
+    scroll.y0 = ALTO_MAPA - ALTO_PANTALLA;  // Empezar desde abajo (1536 - 200 = 1336)
+    scroll.x0 = 0;                           // Centrado horizontalmente
+    scroll_y_objetivo = scroll.y0;           // Objetivo inicial = posición actual
 
     // Desactivamos controles durante la cuenta regresiva
     controles_activos = 0;
