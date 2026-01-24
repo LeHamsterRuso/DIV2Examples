@@ -8,7 +8,7 @@
 //              - Animación del jugador según dirección y estado de disparo
 //
 // NOTA:        Usa las flechas para mover la nave, espacio para disparar y ESC para salir.
-//              Requiere DIV2.PAL, TANYA/LEVEL000.FPG, TANYA/PLAYER.FPG y los FNT de la caperta TANYA.
+//              Requiere DIV2.PAL, TANYA/LEVEL000.FPG, TANYA/PLAYER.FPG y los FNT de la carpeta TANYA.
 //              Código y comentarios en castellano para facilitar la comprensión.
 //------------------------------------------------------------------------------
 

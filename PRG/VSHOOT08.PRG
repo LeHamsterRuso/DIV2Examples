@@ -11,7 +11,7 @@
 
 //
 // NOTA:        Usa las flechas para mover la nave, espacio para disparar y ESC para salir.
-//              Requiere DIV2.PAL, TANYA/LEVEL000.FPG, TANYA/PLAYER.FPG y los FNT de la caperta TANYA.
+//              Requiere DIV2.PAL, TANYA/LEVEL000.FPG, TANYA/PLAYER.FPG y los FNT de la carpeta TANYA.
 //              Código y comentarios en castellano para facilitar la comprensión.
 //------------------------------------------------------------------------------
 
@@ -38,7 +38,6 @@ CONST
     COLOR_NAVE = 31;                // Color de la nave del jugador (paleta DIV2.PAL)
     DISTANCIA_COLISION_JUGADOR = 12; // Distancia de colisión para el jugador
     TAMANO_NAVE_X = 8;              // Tamaño horizontal de la nave del jugador en píxeles
-    TAMANO_NAVE_Y_BASE = 8;         // Tamaño vertical base de la nave del jugador en píxeles
     TAMANO_NAVE_Y_ALTURA = 10;      // Altura del vértice superior de la nave del jugador en píxeles
 
     // Parámetros de enemigos
@@ -55,7 +54,6 @@ CONST
     TIEMPO_DISPARO_ENEMIGO1 = 80;   // Tiempo entre disparos del enemigo tipo 1 (en frames)
     COLOR_ENEMIGO1 = 114;           // Color del enemigo tipo 1 (paleta DIV2.PAL)
     TAMANO_ENEMIGO1 = 8;            // Tamaño del enemigo tipo 1 en píxeles
-    TAMANO_ENEMIGO1_CIRCULO = 3;    // Tamaño del círculo interno del enemigo tipo 1 en píxeles
 
     // Enemigo tipo 2
     INCREMENTO_ANGULO_ENEMIGO2 = 5000;  // Incremento del ángulo para movimiento circular del enemigo tipo 2
@@ -78,7 +76,6 @@ CONST
     TAMANO_BALA_ENEMIGA2 = 3;           // Tamaño de las balas disparadas por el enemigo tipo 2 en píxeles
 
     // Explosiones
-    ITERACIONES_EXPLOSION = 10;         // Número de iteraciones para la animación de explosión
     RADIO_INICIAL_EXPLOSION = 3;        // Radio inicial de la explosión en píxeles
     INCREMENTO_RADIO_EXPLOSION = 2;     // Incremento del radio por iteración en píxeles
 
@@ -95,15 +92,6 @@ CONST
     POS_Y_FPS = 190;                    // Posición Y para "FPS:"
     POS_X_FPS = 40;                     // Posición X para valor de FPS
 
-    // Espaciado de enemigos
-    ESPACIADO_ENEMIGO1_X = 50;          // Espaciado horizontal inicial para enemigo tipo 1
-    ESPACIADO_ENEMIGO1_Y_INICIAL = 30;  // Posición Y inicial para enemigo tipo 1
-    ESPACIADO_ENEMIGO1_Y = 20;          // Espaciado vertical para enemigo tipo 1
-    ESPACIADO_ENEMIGO2_X_INICIAL = 200; // Posición X inicial para enemigo tipo 2
-    ESPACIADO_ENEMIGO2_Y_INICIAL = 40;  // Posición Y inicial para enemigo tipo 2
-    ESPACIADO_ENEMIGO2_X = 20;          // Espaciado horizontal para enemigo tipo 2
-    ESPACIADO_ENEMIGO2_Y = 15;          // Espaciado vertical para enemigo tipo 2
-
     // Parámetros de dibujo
     OPACIDAD_DRAW = 15;                 // Opacidad para dibujos (0-15)
     REGION_DRAW = 0;                    // Región para dibujos (normalmente 0)
@@ -117,8 +105,6 @@ CONST
 
     // Colores adicionales
     COLOR_EXPLOSION_PEQUENA = 61;       // Color para explosiones pequeñas
-    COLOR_ENEMIGO1_CIRCULO = 4;         // Color del círculo interno del enemigo tipo 1
-    COLOR_ENEMIGO2_CIRCULO = 9;         // Color del círculo interno del enemigo tipo 2
 
     // Parámetros de explosiones
     ITERACIONES_EXPLOSION_PEQUENA = 3; // Número de iteraciones para explosión pequeña
@@ -129,8 +115,6 @@ CONST
     ANGULO_ROTACION_ENEMIGO = 15000;   // Ángulo de rotación para enemigos tipo 1 (15 grados * 1000)
     ANGULO_ROTACION_ENEMIGO_OPUESTA = 345000; // Ángulo opuesto (360° - 15°)
     ESCALA_ENEMIGO = 100;               // Escala para xput de enemigos
-    CENTRO_XPUT = 0;                    // Centro X para xput
-    CENTRO_YPUT = 0;                    // Centro Y para xput
 
     // Posiciones de texto para pantallas de cuenta regresiva
     POS_Y_CUENTA_REGRESIVA_BASE = 30;   // Posición Y base para mensajes de cuenta regresiva
@@ -1277,31 +1261,6 @@ BEGIN
     END
 END
 
-// Función: dibujar_enemigo_tipo1
-// Descripción: Dibuja el enemigo tipo 1, borrando los dibujos anteriores.
-// Parámetros:
-//   - box_offset: Puntero al ID de la caja.  -> Usamos el puntero para modificar la variable original.
-//   - circulo_offset: Puntero al ID del círculo.  -> Usamos el puntero para modificar la variable original.
-//   - x: Posición x.
-//   - y: Posición y.
-// Los punteros sirven para modificar las variables originales fuera de la función.
-// - Si modificas una varariable del puntero dentro de la función, se refleja fuera también.
-// - Sirve para evitar el uso de variables globales innecesarias.
-// Los PROCESS se ejecutan en paralelo, mientras que las FUNCTION se ejecutan de forma secuencial
-// - Es decir, hasta que no termine esta función, el proceso que lo llama queda bloqueado
-FUNCTION dibujar_enemigo_tipo1(INT box_offset, INT circulo_offset, INT x, INT y);
-BEGIN
-    // Borramos los dibujos del frame anterior
-    // Controlamos que existe ya una box y un círculo (ID != 0) antes de borrarlos
-    // Si no lo comprobamos, tendríamos una excepción en el primer FRAME y el juego se colgaría
-    IF (*box_offset != 0) delete_draw(*box_offset); END
-    IF (*circulo_offset != 0) delete_draw(*circulo_offset); END
-
-    // Dibujamos el enemigo
-    *box_offset = draw(3, COLOR_ENEMIGO1, OPACIDAD_DRAW, REGION_DRAW, x - TAMANO_ENEMIGO1, y - TAMANO_ENEMIGO1, x + TAMANO_ENEMIGO1, y + TAMANO_ENEMIGO1);
-    *circulo_offset = draw(TIPO_DIBUJO_CIRCULO_RELLENO, COLOR_ENEMIGO1_CIRCULO, OPACIDAD_DRAW, REGION_DRAW, x - TAMANO_ENEMIGO1_CIRCULO, y - TAMANO_ENEMIGO1_CIRCULO, x + TAMANO_ENEMIGO1_CIRCULO, y + TAMANO_ENEMIGO1_CIRCULO);
-END
-
 // Descripción: Maneja el movimiento circular del enemigo tipo 2, manteniéndolo dentro del mapa.
 // Parámetros:
 //   - x_offset: Puntero a la posición x. -> Usamos el puntero para modificar la variable original.
@@ -1374,40 +1333,6 @@ BEGIN
         crear_bala_enemigo(x, y, TIPO_BALA_ENEMIGA2, angulo);   // Crear bala en el array (MODIFICADO)
         *tiempo_offset = 0;         // Reiniciamos el contador de tiempo
     END
-END
-
-// Función: dibujar_enemigo_tipo2
-// Descripción: Dibuja el enemigo tipo 2, borrando los dibujos anteriores.
-// Parámetros:
-//   - linea1_offset: Puntero al ID de la línea 1.  -> Usamos el puntero para modificar la variable original.
-//   - linea2_offset: Puntero al ID de la línea 2.  -> Usamos el puntero para modificar la variable original.
-//   - linea3_offset: Puntero al ID de la línea 3.  -> Usamos el puntero para modificar la variable original.
-//   - linea4_offset: Puntero al ID de la línea 4.  -> Usamos el puntero para modificar la variable original.
-//   - circulo_offset: Puntero al ID del círculo.  -> Usamos el puntero para modificar la variable original.
-//   - x: Posición x.
-//   - y: Posición y.
-// Los punteros sirven para modificar las variables originales fuera de la función.
-// - Si modificas una varariable del puntero dentro de la función, se refleja fuera también.
-// - Sirve para evitar el uso de variables globales innecesarias.
-// Los PROCESS se ejecutan en paralelo, mientras que las FUNCTION se ejecutan de forma secuencial
-// - Es decir, hasta que no termine esta función, el proceso que lo llama queda bloqueado
-FUNCTION dibujar_enemigo_tipo2(INT linea1_offset, INT linea2_offset, INT linea3_offset, INT linea4_offset, INT circulo_offset, INT x, INT y);
-BEGIN
-    // Borramos los dibujos del anterior frame
-    // Comprobamos que existen (ID != 0) antes de borrarlos
-    // Si no lo comprobamos, tendríamos una excepción en el primer FRAME y el juego se colgaría
-    IF (*linea1_offset != 0) delete_draw(*linea1_offset); END
-    IF (*linea2_offset != 0) delete_draw(*linea2_offset); END
-    IF (*linea3_offset != 0) delete_draw(*linea3_offset); END
-    IF (*linea4_offset != 0) delete_draw(*linea4_offset); END
-    IF (*circulo_offset != 0) delete_draw(*circulo_offset); END
-
-    // Dibujamos el enemigo de tipo 2
-    *linea1_offset = draw(1, COLOR_ENEMIGO2, OPACIDAD_DRAW, REGION_DRAW, x, y - TAMANO_ENEMIGO2_LINEA, x + TAMANO_ENEMIGO2_LINEA, y);
-    *linea2_offset = draw(1, COLOR_ENEMIGO2, OPACIDAD_DRAW, REGION_DRAW, x + TAMANO_ENEMIGO2_LINEA, y, x, y + TAMANO_ENEMIGO2_LINEA);
-    *linea3_offset = draw(1, COLOR_ENEMIGO2, OPACIDAD_DRAW, REGION_DRAW, x, y + TAMANO_ENEMIGO2_LINEA, x - TAMANO_ENEMIGO2_LINEA, y);
-    *linea4_offset = draw(1, COLOR_ENEMIGO2, OPACIDAD_DRAW, REGION_DRAW, x - TAMANO_ENEMIGO2_LINEA, y, x, y - TAMANO_ENEMIGO2_LINEA);
-    *circulo_offset = draw(TIPO_DIBUJO_CIRCULO_RELLENO, COLOR_ENEMIGO2_CIRCULO, OPACIDAD_DRAW, REGION_DRAW, x - TAMANO_ENEMIGO2_CIRCULO, y - TAMANO_ENEMIGO2_CIRCULO, x + TAMANO_ENEMIGO2_CIRCULO, y + TAMANO_ENEMIGO2_CIRCULO);
 END
 
 // Proceso: explosion
@@ -1510,14 +1435,7 @@ BEGIN
         // Siguiente frame
         FRAME;
     END
-    
-    // Esperamos a que se suelte la tecla espacio
-    // Evita que se salte la pantalla si se mantiene pulsada
-    // scan_code contiene el código de la última tecla pulsada
-    // Si scan_code es 0, no hay ninguna tecla pulsada
-    WHILE (scan_code != 0)
-        FRAME;
-    END
+
     delete_draw(all_drawing);  // Limpiamos todos los dibujos de la pantalla
     delete_text(all_text);     // Limpiamos todos los textos
     mostrar_textos_hud();      // Volmemos a dibujar los textos del HUD
