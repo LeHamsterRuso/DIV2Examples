@@ -870,8 +870,8 @@ BEGIN
 
     // Auto-desplazamiento: el jugador sube automáticamente con el scroll (1 pixel cada 3 frames)
     // Solo si no está presionando abajo (para permitir quedarse quieto respecto al scroll)
-    // Y solo si el scroll no ha llegado al tope (scroll.y0 > 0)
-    IF (NOT key(_down) AND scroll.y0 > 0)
+    // Y solo si el scroll no ha llegado al tope (scroll.y0 > 0) y si quedan enemigos vivos
+    IF (NOT key(_down) AND scroll.y0 > 0 AND enemigos_vivos > 0)
         IF (contador_scroll == 0)  // Sincronizar con el movimiento del scroll
             *y_offset -= VELOCIDAD_SCROLL;
         END
@@ -1137,8 +1137,8 @@ BEGIN
                             mover_enemigo_tipo2(&enemigo[i].x, &enemigo[i].y, &enemigo[i].ang);
                         END
 
-                        // Verificar si sale del mapa por abajo
-                        IF (enemigo[i].tipo == 1 AND enemigo[i].y > ALTO_MAPA + TAMANO_ENEMIGO1)
+                        // Verificar si sale del área visible por abajo
+                        IF (enemigo[i].y > scroll.y0 + ALTO_PANTALLA + MARGEN_VISIBLE_ABAJO)
                             enemigo[i].activo = 0;
                             remover_enemigo_lista(i);
                             enemigos_vivos--;
