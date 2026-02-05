@@ -308,6 +308,8 @@ GLOBAL
     saltar_cinematica = 0;              // Flag para saltar la cinematica actual (0 = no, 1 = si)
     resultado_pagina_global = -1;       // Resultado de pagina cinematica
     resultado_menu_global = -1;         // Resultado del menu de pausa de cinematicas
+    memoria_inicial = 0;                // Memoria libre al arrancar el juego (en KB)
+    memoria_usada = 0;                  // Memoria consumida por el juego (en KB)
 
     // Definicion de struct para enemigo
     STRUCT enemigo[NUM_ENEMIGOS_MAXIMOS]
@@ -380,6 +382,9 @@ PRIVATE
 // Programa principal
 // Posee el bucle principal del juego que gestiona la logica general, niveles y condiciones de victoria/derrota.
 BEGIN
+    // Capturar memoria libre antes de cargar recursos
+    memoria_inicial = memory_free();
+
     // Arrancamos el juego a 320x200 a 60 FPS con la paleta cargada
     /* En DIV se suelen usar constantes como m320x200, pero aqui definimos la resolucion manualmente
        Al compilar, estas constantes se traducen en valores numericos.
@@ -398,16 +403,6 @@ BEGIN
      */
     set_mode(ANCHO_PANTALLA * 1000 + ALTO_PANTALLA);
     set_fps(FPS_JUEGO, 0);
-
-    // Volumen (0 min, 15 max)
-    setup.master = 15;
-    setup.sound_fx = 15;
-    setup.cd_audio = 15;
-
-    // Aplicar cambios
-    reset_sound();
-    set_volume();
-
 
     cargar_recursos_juego();
     init_cinematics();
@@ -438,6 +433,16 @@ BEGIN
             IF (FPG_LEVEL != 0)
                 unload_fpg(FPG_LEVEL);
                 FPG_LEVEL = 0;
+            END
+
+            // Descargar musica si esta cargada
+            IF (WAV_CHANNEL != 0)
+                stop_sound(WAV_CHANNEL);
+                WAV_CHANNEL = 0;
+            END
+            IF (WAV_MUSIC != 0)
+                unload_wav(WAV_MUSIC);
+                WAV_MUSIC = 0;
             END
 
             // Reiniciar variables globales del juego
@@ -491,6 +496,16 @@ BEGIN
             IF (FPG_LEVEL != 0)
                 unload_fpg(FPG_LEVEL);
                 FPG_LEVEL = 0;
+            END
+
+            // Descargar musica si esta cargada
+            IF (WAV_CHANNEL != 0)
+                stop_sound(WAV_CHANNEL);
+                WAV_CHANNEL = 0;
+            END
+            IF (WAV_MUSIC != 0)
+                unload_wav(WAV_MUSIC);
+                WAV_MUSIC = 0;
             END
 
             // Reiniciar variables globales del juego
@@ -618,6 +633,11 @@ BEGIN
             inicio_nivel();
         END
 
+        // Actualizar memoria usada solo si es el valor maximo (pico de consumo)
+        IF (memoria_inicial - memory_free() > memoria_usada)
+            memoria_usada = memoria_inicial - memory_free();
+        END
+
         // Limpiar todos los dibujos al final del frame para el siguiente
         delete_draw(all_drawing);
         FRAME;
@@ -659,6 +679,10 @@ BEGIN
     write_int(FNT_HUD, POS_X_VALORES, POS_Y_PUNTOS, 0, OFFSET puntos);
     write_int(FNT_HUD, POS_X_VALORES, POS_Y_NIVEL, 0, OFFSET nivel);
     write_int(0, POS_X_FPS, POS_Y_FPS, 0, OFFSET fps);
+
+    // Mostrar RAM usada (en KB)
+    write(0, POS_X_ETIQUETAS + 60, POS_Y_FPS, ALINEACION_IZQUIERDA, "RAM:");
+    write_int(0, POS_X_ETIQUETAS + 90, POS_Y_FPS, 0, OFFSET memoria_usada);
 END
 
 //------------------------------------------------------------------------------
@@ -2171,6 +2195,17 @@ BEGIN
         guardar_top_scores();
         RETURN(1);
     END
+
+    // Descargar musica de la cinematica antes de continuar al nivel
+    IF (WAV_CHANNEL != 0)
+        stop_sound(WAV_CHANNEL);
+        WAV_CHANNEL = 0;
+    END
+    IF (WAV_MUSIC != 0)
+        unload_wav(WAV_MUSIC);
+        WAV_MUSIC = 0;
+    END
+
     // Preparar transicion al siguiente nivel solo si no se ha pedido volver al men£ ni salir
     preparar_transicion_nivel(cinematics[cinematic_id].siguiente_nivel);
     RETURN(0);
@@ -2474,10 +2509,10 @@ BEGIN
     END
 
     IF (ruta_musica != "")
-        if (WAV_CHANNEL != -0)
+        if (WAV_CHANNEL != 0)
             stop_sound(WAV_CHANNEL);  // Detener cualquier sonido previo
         END
-        if (WAV_MUSIC != - 0)
+        if (WAV_MUSIC != 0)
             unload_wav(WAV_MUSIC);    // Descargar cualquier musica previa
         END
         WAV_MUSIC = load_wav(ruta_musica, LOOP_SI);
