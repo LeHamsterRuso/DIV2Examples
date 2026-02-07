@@ -29,6 +29,8 @@ CONST
     // Usar constantes reduce el consumo de memoria y los calculos en tiempo de ejecucion.
     // - Si haces una resta o una suma entre constantes, el compilador lo calcula en tiempo de compilacion y no entiempo de ejecucion.
 
+    _DEBUG_ = 0;    // Flag de debug (0 = desactivado, 1 = activado). Sirve para saltar el nivel con la tecla P y ver el consumo de RAM y el contador de FPS en pantalla.
+
     // Mensajes de texto al salir del juego
     TEXTO_SALIDA = "Hasta la próxima, camarada.";
 
@@ -97,7 +99,7 @@ CONST
     OFFSET_DISPARO_Y = 30;              // Offset Y para la posicion del disparo del jugador
 
     // Cuenta regresiva
-    SEGUNDOS_CUENTA_REGRESIVA = 5;      // Segundos para la cuenta regresiva al acabar un nivel
+    SEGUNDOS_CUENTA_REGRESIVA = 3;      // Segundos para la cuenta regresiva al acabar un nivel
 
     // Posiciones de UI
     POS_X_ETIQUETAS = 10;               // Posicion X para etiquetas de texto
@@ -215,6 +217,7 @@ CONST
     RUTA_WAV_CG002 = "TANYA/CG002.WAV"; // Ruta del WAV para música de cinematica 2
     RUTA_WAV_CG003 = "TANYA/CG003.WAV"; // Ruta del WAV para música de cinematica 3
     RUTA_WAV_CG004 = "TANYA/CG004.WAV"; // Ruta del WAV para música de cinematica 4
+    RUTA_WAV_LEVEL01 = "TANYA/LEVEL01.WAV"; // Ruta del WAV para música del nivel 1
     RUTA_WAV_LEVEL02 = "TANYA/LEVEL02.WAV"; // Ruta del WAV para música del nivel 2
     RUTA_WAV_LEVEL03 = "TANYA/LEVEL03.WAV"; // Ruta del WAV para música del nivel 3
     RUTA_WAV_LEVEL04 = "TANYA/LEVEL04.WAV"; // Ruta del WAV para música del nivel 4
@@ -278,6 +281,7 @@ GLOBAL
     game_over = 0;                      // Indicador de estado de juego (0 = jugando, 1 = game over)
     enemigo_muerto_id = 0;              // ID del enemigo marcado como "muerto"
     controles_activos = 0;              // Contemplaa si los controles del jugador estan activos (1) o desactivados (0), empleado, por ejemplo, durante la cuenta regresiva
+    STRING musica_actual = "";          // Ruta de la música actualmente sonando
     primera_bala_jugador_activa = -1;   // Indice de la primera bala jugador activa en la lista enlazada (-1 = lista vacia)
     primer_slot_libre_jugador = 0;      // Indice del primer slot libre para balas jugador
     primera_bala_enemigo_activa = -1;   // Indice de la primera bala enemigo activa en la lista enlazada (-1 = lista vacia)
@@ -429,42 +433,7 @@ BEGIN
             delete_draw(all_drawing);
             clear_screen();
 
-            // Descargar FPG del nivel
-            IF (FPG_LEVEL != 0)
-                unload_fpg(FPG_LEVEL);
-                FPG_LEVEL = 0;
-            END
-
-            // Descargar musica si esta cargada
-            IF (WAV_CHANNEL != 0)
-                stop_sound(WAV_CHANNEL);
-                WAV_CHANNEL = 0;
-            END
-            IF (WAV_MUSIC != 0)
-                unload_wav(WAV_MUSIC);
-                WAV_MUSIC = 0;
-            END
-
-            // Reiniciar variables globales del juego
-            puntos = 0;
-            nivel = 1;
-            nivel_actual = NIVEL_INICIAL;
-            game_over = 0;
-            vidas_jugador = VIDAS_INICIALES;
-            jugador_inmune = 0;
-            juego_pausado = 0;
-            controles_activos = 0;
-            scroll_y_objetivo = 0;
-            contador_scroll = 0;
-            volver_menu = 0;
-            saltar_cinematica = 0;
-
-            // Reiniciar listas enlazadas
-            primera_bala_jugador_activa = -1;
-            primer_slot_libre_jugador = 0;
-            primera_bala_enemigo_activa = -1;
-            primer_slot_libre_enemigo = 0;
-            primera_enemigo_activo = -1;
+            limpiar_recursos_y_reiniciar();
 
             // Iniciar nueva partida
             iniciar_nueva_partida();
@@ -477,6 +446,7 @@ BEGIN
         IF (key(_ESC))
             // Mostrar menu de confirmacion de salida
             confirmar_salida();
+            mostrar_textos_hud(); // Volver a mostrar textos del HUD despues de cerrar el menu
         END
 
         // Verificar si debemos volver al menu principal
@@ -493,36 +463,7 @@ BEGIN
             clear_screen();
 
             // Descargar FPG del nivel
-            IF (FPG_LEVEL != 0)
-                unload_fpg(FPG_LEVEL);
-                FPG_LEVEL = 0;
-            END
-
-            // Descargar musica si esta cargada
-            IF (WAV_CHANNEL != 0)
-                stop_sound(WAV_CHANNEL);
-                WAV_CHANNEL = 0;
-            END
-            IF (WAV_MUSIC != 0)
-                unload_wav(WAV_MUSIC);
-                WAV_MUSIC = 0;
-            END
-
-            // Reiniciar variables globales del juego
-            puntos = 0;
-            nivel = 1;
-            nivel_actual = NIVEL_INICIAL;
-            game_over = 0;
-            vidas_jugador = VIDAS_INICIALES;
-            jugador_inmune = 0;
-            juego_pausado = 0;
-            controles_activos = 0;
-            scroll_y_objetivo = 0;
-            contador_scroll = 0;
-            volver_menu = 0;
-
-            // Resetear flags de cinemáticas para nueva partida
-            saltar_cinematica = 0;
+            limpiar_recursos_y_reiniciar();
             salir_juego = 0;
 
             // Reiniciar listas enlazadas
@@ -670,7 +611,6 @@ BEGIN
     // Dibujar labels estaticos para los textos
     write(FNT_HUD, POS_X_ETIQUETAS, POS_Y_PUNTOS, ALINEACION_IZQUIERDA, "PUNTOS:");
     write(FNT_HUD, POS_X_ETIQUETAS, POS_Y_NIVEL, ALINEACION_IZQUIERDA, "NIVEL:");
-    write(0, POS_X_ETIQUETAS, POS_Y_FPS, ALINEACION_IZQUIERDA, "FPS:");
     write(FNT_X, POS_X_ETIQUETAS+215, POS_Y_FPS-3, ALINEACION_IZQUIERDA, "x.com/Hamster_ruso");
 
     // Dibujar valores dinamicos usando write_int
@@ -678,11 +618,16 @@ BEGIN
     // El valor se actualizara automaticamente al cambiar la variable
     write_int(FNT_HUD, POS_X_VALORES, POS_Y_PUNTOS, 0, OFFSET puntos);
     write_int(FNT_HUD, POS_X_VALORES, POS_Y_NIVEL, 0, OFFSET nivel);
-    write_int(0, POS_X_FPS, POS_Y_FPS, 0, OFFSET fps);
 
-    // Mostrar RAM usada (en KB)
-    write(0, POS_X_ETIQUETAS + 60, POS_Y_FPS, ALINEACION_IZQUIERDA, "RAM:");
-    write_int(0, POS_X_ETIQUETAS + 90, POS_Y_FPS, 0, OFFSET memoria_usada);
+    IF (_DEBUG_ == 1)
+        // Mostrar FPS reales (solo en modo debug)
+        write(0, POS_X_ETIQUETAS, POS_Y_FPS, ALINEACION_IZQUIERDA, "FPS:");
+        write_int(0, POS_X_FPS, POS_Y_FPS, 0, OFFSET fps);
+
+        // Mostrar RAM usada (en KB)
+        write(0, POS_X_ETIQUETAS + 60, POS_Y_FPS, ALINEACION_IZQUIERDA, "RAM (KB):");
+        write_int(0, POS_X_ETIQUETAS + 90, POS_Y_FPS, 0, OFFSET memoria_usada);
+    END
 END
 
 //------------------------------------------------------------------------------
@@ -1354,9 +1299,9 @@ BEGIN
     END
 
     // Control de debug: presionar P para acabar el nivel (para pruebas)
-    /*IF (key(_p))
+    IF (_DEBUG_ == 1 && key(_p))
         enemigos_vivos = 0;
-    END*/
+    END
 END
 
 // Funcion: manejar_disparo_jugador (MODIFICADA)
@@ -2023,6 +1968,78 @@ BEGIN
 END
 
 //------------------------------------------------------------------------------
+// FUNCION: cargar_y_reproducir_wav
+// DESCRIPCION: Carga un wav, muestra "CARGANDO", reproduce el sonido y borra el texto
+// PARAMETROS:
+//   - ruta: Ruta del archivo wav
+//   - loop_mode: Modo de loop (LOOP_SI o LOOP_NO)
+//------------------------------------------------------------------------------
+FUNCTION cargar_y_reproducir_wav(STRING ruta, INT loop_mode);
+PRIVATE
+    INT id_texto;
+BEGIN
+    IF (ruta == musica_actual) RETURN; END
+    detener_y_descargar_musica();
+    id_texto = write(0, 160, 100, 4, "CARGANDO");
+    FRAME;
+    WAV_MUSIC = load_wav(ruta, loop_mode);
+    WAV_CHANNEL = sound(WAV_MUSIC, VOL_MAX, FREQ_NORMAL);
+    musica_actual = ruta;
+    delete_text(id_texto);
+END
+
+//------------------------------------------------------------------------------
+// FUNCION: detener_y_descargar_musica
+// DESCRIPCION: Detiene el canal de sonido y descarga la música si están activos
+//------------------------------------------------------------------------------
+FUNCTION detener_y_descargar_musica();
+BEGIN
+    IF (WAV_CHANNEL != 0)
+        stop_sound(WAV_CHANNEL);
+    END
+    IF (WAV_MUSIC != 0)
+        unload_wav(WAV_MUSIC);
+    END
+    musica_actual = "";
+END
+
+//------------------------------------------------------------------------------
+// FUNCION: limpiar_recursos_y_reiniciar
+// DESCRIPCION: Descarga recursos del nivel (FPG, música) y reinicia variables globales del juego
+//------------------------------------------------------------------------------
+FUNCTION limpiar_recursos_y_reiniciar();
+BEGIN
+    // Descargar FPG del nivel
+    IF (FPG_LEVEL != 0)
+        unload_fpg(FPG_LEVEL);
+        FPG_LEVEL = 0;
+    END
+
+    // Reiniciar variables globales del juego
+    puntos = 0;
+    nivel = 1;
+    nivel_actual = NIVEL_INICIAL;
+    game_over = 0;
+    vidas_jugador = VIDAS_INICIALES;
+    jugador_inmune = 0;
+    juego_pausado = 0;
+    controles_activos = 0;
+    scroll_y_objetivo = 0;
+    contador_scroll = 0;
+    volver_menu = 0;
+
+    // Resetear flags de cinemáticas para nueva partida
+    saltar_cinematica = 0;
+
+    // Reiniciar listas enlazadas
+    primera_bala_jugador_activa = -1;
+    primer_slot_libre_jugador = 0;
+    primera_bala_enemigo_activa = -1;
+    primer_slot_libre_enemigo = 0;
+    primera_enemigo_activo = -1;
+END
+
+//------------------------------------------------------------------------------
 // PROCESS: mostrar_pagina_cinematica
 // DESCRIPCION: Muestra una pagina de texto en el area de dialogo de la cinematica
 //              Espera a que se pulse espacio para continuar
@@ -2135,12 +2152,7 @@ BEGIN
     delete_text(all_text);  // Limpiar textos previos
     delete_draw(all_drawing);  // Limpiar dibujos previos
     // Detener música
-    IF (WAV_CHANNEL != 0)
-       stop_sound(WAV_CHANNEL);
-    END
-    IF (WAV_MUSIC != 0)
-        unload_wav(WAV_MUSIC);
-    END
+    detener_y_descargar_musica();
 
     // Verificar si se debe saltar la cinematica
     IF (saltar_cinematica == 1)
@@ -2150,8 +2162,7 @@ BEGIN
 
 
     // Cargar música de la cinemática (una vez por cinemática, no por CG)
-    WAV_MUSIC = load_wav(cinematics[cinematic_id].cgs[0].wav_ruta, LOOP_SI);
-    WAV_CHANNEL = sound(WAV_MUSIC, VOL_MAX, FREQ_NORMAL);
+    cargar_y_reproducir_wav(cinematics[cinematic_id].cgs[0].wav_ruta, LOOP_SI);
 
     // Bucle por cada CG
     FOR (cg_actual = 0; cg_actual < cinematics[cinematic_id].num_cg
@@ -2196,16 +2207,6 @@ BEGIN
         RETURN(1);
     END
 
-    // Descargar musica de la cinematica antes de continuar al nivel
-    IF (WAV_CHANNEL != 0)
-        stop_sound(WAV_CHANNEL);
-        WAV_CHANNEL = 0;
-    END
-    IF (WAV_MUSIC != 0)
-        unload_wav(WAV_MUSIC);
-        WAV_MUSIC = 0;
-    END
-
     // Preparar transicion al siguiente nivel solo si no se ha pedido volver al menú ni salir
     preparar_transicion_nivel(cinematics[cinematic_id].siguiente_nivel);
     RETURN(0);
@@ -2243,16 +2244,10 @@ BEGIN
     FPG_START = load_fpg(RUTA_FPG_START);
     load_pal(RUTA_FPG_START);
 
-    if (WAV_CHANNEL != 0)
-        stop_sound(WAV_CHANNEL);  // Detener cualquier sonido previo
-    END
-    if (WAV_MUSIC != 0)
-        unload_wav(WAV_MUSIC);    // Descargar cualquier musica previa
-    END
+    detener_y_descargar_musica();
 
     // Cargar y reproducir música de título en bucle
-    WAV_MUSIC = load_wav(RUTA_WAV_TITLE, LOOP_SI); // LOOP_SI = Reproducción en bucle
-    WAV_CHANNEL = sound(WAV_MUSIC, VOL_MAX, FREQ_NORMAL);
+    cargar_y_reproducir_wav(RUTA_WAV_TITLE, LOOP_SI);
 
     // Mostrar el grafico 1 del FPG (pantalla completa)
     put_screen(FPG_START, FONDO_SD);
@@ -2496,6 +2491,7 @@ BEGIN
 
     // Cargar música del nivel
     SWITCH (nivel_actual)
+        CASE 0: ruta_musica = RUTA_WAV_CG001; END
         CASE 1: ruta_musica = RUTA_WAV_LEVEL02; END
         CASE 2: ruta_musica = RUTA_WAV_LEVEL03; END
         CASE 3: ruta_musica = RUTA_WAV_LEVEL04; END
@@ -2509,14 +2505,7 @@ BEGIN
     END
 
     IF (ruta_musica != "")
-        if (WAV_CHANNEL != 0)
-            stop_sound(WAV_CHANNEL);  // Detener cualquier sonido previo
-        END
-        if (WAV_MUSIC != 0)
-            unload_wav(WAV_MUSIC);    // Descargar cualquier musica previa
-        END
-        WAV_MUSIC = load_wav(ruta_musica, LOOP_SI);
-        WAV_CHANNEL = sound(WAV_MUSIC, VOL_MAX, FREQ_NORMAL);
+        cargar_y_reproducir_wav(ruta_musica, LOOP_SI);
     END
 
     // Inicializar el sistema de balas
