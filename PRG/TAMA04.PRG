@@ -1,19 +1,21 @@
 //------------------------------------------------------------------------------
-// TÍTULO:      TAMA03.PRG - Menú navegable simple (entregable 3)
+// TÍTULO:      TAMA04.PRG - Persistencia de stats y pantalla de intro (entregable 4)
 // AUTOR:       Sebastian J. MONCHO MAQUET
-// FECHA:       14/02/2026
-// DESCRIPCIÓN: Reutiliza el esqueleto visual de TAMA02B.PRG y añade un menúnnavegable con opciones.
-//              - Navegación: flechas ARRIBA/ABAJO o IZQUIERDA/DERECHA
-//              - Selección: ENTER / SPACE
-//              - Seleccionar una acción muestra una CG y un texto
-//              - "Salir" termina la ejecución; 
-//
+// FECHA:       21/02/2026
+// DESCRIPCIÓN: Basado en TAMA03.PRG. Añade:
+//              - Nuevos stats: limpieza, descanso, salud
+//              - Fichero de guardado TAMA.SAV con los stats de la mascota
+//                · Si no existe: Aisha se presenta (primera vez)
+//                · Si existe:    Aisha saluda al estilo Outlaw Stars
+//              - Cada acción modifica los stats y guarda al terminar
+//              - normalizar_stats() mantiene todos los stats en [0..10]
 //------------------------------------------------------------------------------
 
 PROGRAM TAMA_WAIFU;
 
 CONST
     PERMISO_ESCRITURA = "w";    // w = escritura, r = lectura, a = append (añadir al final)
+    PERMISO_LECTURA   = "r";    // modo lectura para cargar el fichero SAV
 
     // ID de los gráficos
     CG_AISHA = 4;         // ID del gráfico que muestra a Aisha
@@ -22,8 +24,11 @@ CONST
     // Índices para HUD, recorremos un bucle para mostrar los textos en pantalla
     HUD_HAMBRE = 0;     // Índice para el texto "Hambre:" y su valor
     HUD_FELICIDAD = 1;  // Índice para el texto "Felicidad:" y su valor
-    HUD_DISCIPLINA = 2; // Índice para el texto "Disc:" y su valor
-    HUD_COUNT = 3;      // Número total de labels del HUD (fin del bucle)
+    HUD_DISCIPLINA = 2; // Índice para el texto "Disciplina:" y su valor
+    HUD_LIMPIEZA = 3;   // Índice para el texto "Limpieza:" y su valor
+    HUD_DESCANSO = 4;   // Índice para el texto "Descanso:" y su valor
+    HUD_SALUD = 5;      // Índice para el texto "Salud:" y su valor
+    HUD_COUNT = 6;      // Número total de labels del HUD (fin del bucle)
 
     // Índices para los textos del reloj, recorremos un bucle para mostrar los textos en pantalla
     RL_HORA_LABEL = 0;  // 'Hora:' antes de la hora
@@ -74,7 +79,7 @@ GLOBAL
 
     // Estructura global del HUD (labels como array)
     STRUCT hud
-        STRUCT label[HUD_COUNT] // Lista de labels ("Hambre:", "Felicidad:", "Disc:")
+        STRUCT label[HUD_COUNT] // Lista de labels ("Hambre:", "Felicidad:", ...)
             STRUCT pos          // Posición de cada label en pantalla
                 x = 0;
                 y = 0;
@@ -115,7 +120,7 @@ GLOBAL
             x = 0;        // posición de esquina superior izquierda
             y = 0;
             width = 320;  // ancho del rectángulo (se ajusta en tiempo de ejecución)
-            height = 20;  // alto del rectángulo
+            height = 30;  // alto del rectángulo (ampliado para 2 filas de stats + reloj)
         END
     END
 
@@ -124,6 +129,7 @@ GLOBAL
         aisha = "tama/aisha.fpg";    // Fichero con los gráficos de la chica mascota
         hud = "tama/hud.fpg";        // Fichero con los gráficos de la interfaz
         tmp_nombre = "tm_time.tmp";  // Fichero temporal para obtener la hora del sistema
+        save = "tama/tama.sav";      // Fichero de guardado de stats
     END
 
     // Estructura de reloj para fecha/hora del sistema
@@ -142,9 +148,12 @@ GLOBAL
 
         // Stats de la mascota — encapsulan el estado
         STRUCT stats
-            hambre = 2;
-            felicidad = 3;
-            disciplina = 1;
+            hambre = 5;
+            felicidad = 5;
+            disciplina = 5;
+            limpieza = 10;
+            descanso = 10;
+            salud = 10;
         END
     END
 
@@ -187,8 +196,19 @@ BEGIN
     // Inicializamos el menú
     init_menu();
 
+    // Usamos el proceso main como marco del cuadro de diálogo durante la intro
+    file  = fpg.hud;
+    graph = MARCO_DIALOGO;
+    x     = configuracion.pantalla.ancho / 2;
+    y     = configuracion.pantalla.alto - configuracion.cuadro_dialogo.alto / 2;
+
+    mostrar_mascota();  // lanzamos el sprite de Aisha antes de la intro
+
+    intro_aisha();      // presentación o saludo; bloquea hasta que el jugador pulsa ENTER/SPACE
+
+    graph = 0;          // quitamos el gráfico del proceso main
+
     // Iniciamos los procesos que correrán en paralelo
-    mostrar_mascota();  // El personaje a mostrar
     mostrar_hud();      // Información en pantalla
     mostrar_comandos(); // La lista de comandos
     controlar_menu();   // Gestiona la entrada del menú
@@ -304,7 +324,7 @@ END
 //------------------------------------------------------------------------------
 PROCESS mostrar_mascota();
 BEGIN
-    file = fpg.aisha;   // Fichero FPG a utiiizar
+    file = fpg.aisha;   // Fichero FPG a utilizar
     mascota.graph = CG_AISHA;   // ID del gráfico a mostrar
 
     // X = mitad del ancho de la pantalla, para que quede centrado
@@ -321,12 +341,15 @@ BEGIN
 END
 
 //------------------------------------------------------------------------------
-// PROCESS: init_hud
-// DESCRIPCIÓN: Inicializa las posiciones y textos de los labels del HUD
-// que luego serán usados en el proceso `mostrar_hud`
+// FUNCTION: init_hud
+// DESCRIPCIÓN: Inicializa posiciones y textos del HUD con 6 stats en 2 filas.
+//   Fila 1 (y=5):  Hambre | Felicidad | Disciplina
+//   Fila 2 (y=14): Limpieza | Descanso | Salud
+//   Reloj  (y=23): Hora HH:MM:SS  |  Fecha DD/MM/AAAA
 //------------------------------------------------------------------------------
 FUNCTION init_hud();
 BEGIN
+    // --- Fila 1: Hambre, Felicidad, Disciplina ---
     hud.label[HUD_HAMBRE].pos.x = 8;
     hud.label[HUD_HAMBRE].pos.y = 5;
     hud.label[HUD_HAMBRE].text.label = "Hambre:";
@@ -345,49 +368,67 @@ BEGIN
     hud.label[HUD_DISCIPLINA].value_pos.x = 286;
     hud.label[HUD_DISCIPLINA].value_pos.y = 5;
 
-    // Labels del reloj
-    hud.reloj.labels[RL_HORA_LABEL].pos.x = 64;
-    hud.reloj.labels[RL_HORA_LABEL].pos.y = 17;
+    // --- Fila 2: Limpieza, Descanso, Salud ---
+    hud.label[HUD_LIMPIEZA].pos.x = 8;
+    hud.label[HUD_LIMPIEZA].pos.y = 14;
+    hud.label[HUD_LIMPIEZA].text.label = "Limpieza:";
+    hud.label[HUD_LIMPIEZA].value_pos.x = 72;
+    hud.label[HUD_LIMPIEZA].value_pos.y = 14;
+
+    hud.label[HUD_DESCANSO].pos.x = 109;
+    hud.label[HUD_DESCANSO].pos.y = 14;
+    hud.label[HUD_DESCANSO].text.label = "Descanso:";
+    hud.label[HUD_DESCANSO].value_pos.x = 181;
+    hud.label[HUD_DESCANSO].value_pos.y = 14;
+
+    hud.label[HUD_SALUD].pos.x = 210;
+    hud.label[HUD_SALUD].pos.y = 14;
+    hud.label[HUD_SALUD].text.label = "Salud:";
+    hud.label[HUD_SALUD].value_pos.x = 254;
+    hud.label[HUD_SALUD].value_pos.y = 14;
+
+    // --- Reloj (fila 3, y=23) ---
+    hud.reloj.labels[RL_HORA_LABEL].pos.x = 4;
+    hud.reloj.labels[RL_HORA_LABEL].pos.y = 23;
     hud.reloj.labels[RL_HORA_LABEL].text.label = "Hora:";
 
-    hud.reloj.values[RV_HORA].pos.x = 104; // hora (2 dígitos)
-    hud.reloj.values[RV_HORA].pos.y = 17;
+    hud.reloj.values[RV_HORA].pos.x = 40;
+    hud.reloj.values[RV_HORA].pos.y = 23;
 
-    hud.reloj.labels[RL_SEP_T1].pos.x = 120; // ':'
-    hud.reloj.labels[RL_SEP_T1].pos.y = 17;
+    hud.reloj.labels[RL_SEP_T1].pos.x = 56;
+    hud.reloj.labels[RL_SEP_T1].pos.y = 23;
     hud.reloj.labels[RL_SEP_T1].text.label = ":";
 
-    hud.reloj.values[RV_MIN].pos.x = 128; // minutos
-    hud.reloj.values[RV_MIN].pos.y = 17;
+    hud.reloj.values[RV_MIN].pos.x = 64;
+    hud.reloj.values[RV_MIN].pos.y = 23;
 
-    hud.reloj.labels[RL_SEP_T2].pos.x = 144; // ':'
-    hud.reloj.labels[RL_SEP_T2].pos.y = 17;
+    hud.reloj.labels[RL_SEP_T2].pos.x = 80;
+    hud.reloj.labels[RL_SEP_T2].pos.y = 23;
     hud.reloj.labels[RL_SEP_T2].text.label = ":";
 
-    hud.reloj.values[RV_SEG].pos.x = 152; // segundos
-    hud.reloj.values[RV_SEG].pos.y = 17;
+    hud.reloj.values[RV_SEG].pos.x = 88;
+    hud.reloj.values[RV_SEG].pos.y = 23;
 
-    // Fecha
-    hud.reloj.labels[RL_FECHA_LABEL].pos.x = 188;
-    hud.reloj.labels[RL_FECHA_LABEL].pos.y = 17;
+    hud.reloj.labels[RL_FECHA_LABEL].pos.x = 140;
+    hud.reloj.labels[RL_FECHA_LABEL].pos.y = 23;
     hud.reloj.labels[RL_FECHA_LABEL].text.label = "Fecha:";
 
-    hud.reloj.values[RV_DIA].pos.x = 232; // día
-    hud.reloj.values[RV_DIA].pos.y = 17;
+    hud.reloj.values[RV_DIA].pos.x = 184;
+    hud.reloj.values[RV_DIA].pos.y = 23;
 
-    hud.reloj.labels[RL_SEP_D_M].pos.x = 248; // '/'
-    hud.reloj.labels[RL_SEP_D_M].pos.y = 17;
+    hud.reloj.labels[RL_SEP_D_M].pos.x = 200;
+    hud.reloj.labels[RL_SEP_D_M].pos.y = 23;
     hud.reloj.labels[RL_SEP_D_M].text.label = "/";
 
-    hud.reloj.values[RV_MES].pos.x = 256; // mes
-    hud.reloj.values[RV_MES].pos.y = 17;
+    hud.reloj.values[RV_MES].pos.x = 208;
+    hud.reloj.values[RV_MES].pos.y = 23;
 
-    hud.reloj.labels[RL_SEP_M_Y].pos.x = 272; // '/'
-    hud.reloj.labels[RL_SEP_M_Y].pos.y = 17;
+    hud.reloj.labels[RL_SEP_M_Y].pos.x = 224;
+    hud.reloj.labels[RL_SEP_M_Y].pos.y = 23;
     hud.reloj.labels[RL_SEP_M_Y].text.label = "/";
 
-    hud.reloj.values[RV_ANO].pos.x = 280; // año (4 dígitos)
-    hud.reloj.values[RV_ANO].pos.y = 17;
+    hud.reloj.values[RV_ANO].pos.x = 232;
+    hud.reloj.values[RV_ANO].pos.y = 23;
 
     // Ajustamos el ancho del fondo del HUD al ancho de la pantalla
     hud.background.width = configuracion.pantalla.ancho;
@@ -421,6 +462,9 @@ BEGIN
     write_int(fuente.fichero, hud.label[HUD_HAMBRE].value_pos.x, hud.label[HUD_HAMBRE].value_pos.y, fuente.alineacion.izq, OFFSET mascota.stats.hambre);
     write_int(fuente.fichero, hud.label[HUD_FELICIDAD].value_pos.x, hud.label[HUD_FELICIDAD].value_pos.y, fuente.alineacion.izq, OFFSET mascota.stats.felicidad);
     write_int(fuente.fichero, hud.label[HUD_DISCIPLINA].value_pos.x, hud.label[HUD_DISCIPLINA].value_pos.y, fuente.alineacion.izq, OFFSET mascota.stats.disciplina);
+    write_int(fuente.fichero, hud.label[HUD_LIMPIEZA].value_pos.x,   hud.label[HUD_LIMPIEZA].value_pos.y,   fuente.alineacion.izq, OFFSET mascota.stats.limpieza);
+    write_int(fuente.fichero, hud.label[HUD_DESCANSO].value_pos.x,   hud.label[HUD_DESCANSO].value_pos.y,   fuente.alineacion.izq, OFFSET mascota.stats.descanso);
+    write_int(fuente.fichero, hud.label[HUD_SALUD].value_pos.x,      hud.label[HUD_SALUD].value_pos.y,      fuente.alineacion.izq, OFFSET mascota.stats.salud);
 
     // Escribimos los labels del reloj uno a uno
     FOR (idx = 0; idx < RL_COUNT; idx++)
@@ -589,6 +633,8 @@ BEGIN
             // Selección con ENTER / SPACE
             IF (key(_enter) OR key(_space))
                 IF (menu.selected == menu.count - 1)
+                    // Salir: guardamos y salimos
+                    guardar_partida();
                     exit("Hasta pronto.", 0);
                 ELSE
                     menu.active = 1;
@@ -596,8 +642,9 @@ BEGIN
                 END
             END
         ELSE
-            // Cerrar acción activa con ENTER / SPACE / ESC
+            // Cerrar acción activa → aplicar efecto, guardar, volver al menú
             IF (key(_enter) OR key(_space) OR key(_esc))
+                aplicar_efecto(menu.accion_id);
                 menu.active = 0;
                 mascota.graph = CG_AISHA;
             END
@@ -677,5 +724,169 @@ BEGIN
     END
 
     menu.selected = new_idx;
+    return(0);
+END
+
+// FUNCTION: cargar_partida
+// DESCRIPCIÓN: Lee TAMA.SAV y rellena mascota.stats. Devuelve 1 si OK, 0 si no existe.
+//------------------------------------------------------------------------------
+FUNCTION cargar_partida();
+PRIVATE
+    fid = 0;
+BEGIN
+    fid = fopen(rutas.save, PERMISO_LECTURA);
+    IF (fid == 0)
+        return(0);  // fichero no existe → primera vez
+    END
+
+    fread(OFFSET mascota.stats, 1, fid);
+
+    fclose(fid);
+    return(1);
+END
+
+//------------------------------------------------------------------------------
+// FUNCTION: guardar_partida
+// DESCRIPCIÓN: Escribe los stats actuales de mascota en TAMA.SAV.
+//------------------------------------------------------------------------------
+FUNCTION guardar_partida();
+PRIVATE
+    fid = 0;
+BEGIN
+    fid = fopen(rutas.save, PERMISO_ESCRITURA);
+
+    fwrite(OFFSET mascota.stats, 1, fid);
+
+    fclose(fid);
+    return(0);
+END
+
+//------------------------------------------------------------------------------
+// FUNCTION: clamp_stat
+// DESCRIPCIÓN: Devuelve `v` acotado al rango [0..10].
+//------------------------------------------------------------------------------
+FUNCTION clamp_stat(INT v);
+BEGIN
+    IF (v > 10) return(10); END
+    IF (v <  0) return(0);  END
+    return(v);
+END
+
+//------------------------------------------------------------------------------
+// FUNCTION: normalizar_stats
+// DESCRIPCIÓN: Clampea todos los stats al rango [0..10].
+//------------------------------------------------------------------------------
+FUNCTION normalizar_stats();
+BEGIN
+    mascota.stats.hambre     = clamp_stat(mascota.stats.hambre);
+    mascota.stats.felicidad  = clamp_stat(mascota.stats.felicidad);
+    mascota.stats.disciplina = clamp_stat(mascota.stats.disciplina);
+    mascota.stats.limpieza   = clamp_stat(mascota.stats.limpieza);
+    mascota.stats.descanso   = clamp_stat(mascota.stats.descanso);
+    mascota.stats.salud      = clamp_stat(mascota.stats.salud);
+    return(0);
+END
+
+//------------------------------------------------------------------------------
+// FUNCTION: aplicar_efecto
+// DESCRIPCIÓN: Aplica los cambios de stats correspondientes a la acción `id`.
+//              Tras modificar los valores llama a normalizar_stats() y guarda.
+//   0 Jugar     → felicidad+2, disciplina-1, limpieza-1, descanso-2
+//   1 Alimentar → hambre+2
+//   2 Estudiar  → felicidad-1, disciplina+2, descanso-2
+//   3 Baño      → limpieza=10, descanso-1
+//   4 Curar     → salud=10
+//   5 Luces     → descanso=10
+//------------------------------------------------------------------------------
+FUNCTION aplicar_efecto(INT id_efecto);
+BEGIN
+    SWITCH (id_efecto)
+        CASE 0: // Jugar
+            mascota.stats.felicidad  = mascota.stats.felicidad  + 2;
+            mascota.stats.disciplina = mascota.stats.disciplina - 1;
+            mascota.stats.limpieza   = mascota.stats.limpieza   - 1;
+            mascota.stats.descanso   = mascota.stats.descanso   - 2;
+        END
+        CASE 1: // Alimentar
+            mascota.stats.hambre = mascota.stats.hambre + 2;
+        END
+        CASE 2: // Estudiar
+            mascota.stats.felicidad  = mascota.stats.felicidad  - 1;
+            mascota.stats.disciplina = mascota.stats.disciplina + 2;
+            mascota.stats.descanso   = mascota.stats.descanso   - 2;
+        END
+        CASE 3: // Baño
+            mascota.stats.limpieza = 10;
+            mascota.stats.descanso = mascota.stats.descanso - 1;
+        END
+        CASE 4: // Curar
+            mascota.stats.salud = 10;
+        END
+        CASE 5: // Luces
+            mascota.stats.descanso = 10;
+        END
+    END
+
+    normalizar_stats();
+    guardar_partida();
+    return(0);
+END
+
+//------------------------------------------------------------------------------
+// FUNCTION: intro_aisha
+// DESCRIPCIÓN: Intenta cargar TAMA.SAV.
+//              · Si no existe → presentación de Aisha (primera vez)
+//              · Si existe    → saludo al estilo Outlaw Stars
+//              Espera a que el jugador pulse ENTER/SPACE y hace on-release.
+//              Nota: el proceso main ya tiene asignado el gráfico MARCO_DIALOGO
+//              y mostrar_mascota() ya está corriendo; esta función solo escribe
+//              texto y llama a FRAME.
+//------------------------------------------------------------------------------
+FUNCTION intro_aisha();
+PRIVATE
+    save_existe = 0;
+    id_l1 = 0;
+    id_l2 = 0;
+    cx = 0;
+    cy = 0;
+BEGIN
+    file = fpg.hud;         // Fichero FPG a utilizar
+    graph = MARCO_DIALOGO;  // ID del gráfico del marco del cuadro de diálogo
+
+    // Calcular posiciones locales del marco (no forman parte de la STRUCT `menu`)
+    x = configuracion.pantalla.ancho / 2;
+    y = configuracion.pantalla.alto - configuracion.cuadro_dialogo.alto / 2;
+
+    cx = configuracion.pantalla.ancho / 2;
+    cy = configuracion.pantalla.alto - configuracion.cuadro_dialogo.alto / 2;
+
+    save_existe = cargar_partida();
+
+    IF (save_existe == 0)
+        // Primera vez — presentación
+        id_l1 = write(fuente.fichero, cx, cy - 8, fuente.alineacion.centro,
+                      "¡Soy Aisha Clan-Clan, orgullo de");
+        id_l2 = write(fuente.fichero, cx, cy + 4, fuente.alineacion.centro,
+                      "los Ctarl-Ctarl! ¡Cuídame bien!");
+    ELSE
+        // Ya existe partida — saludo tsundere de Outlaw Stars
+        id_l1 = write(fuente.fichero, cx, cy - 8, fuente.alineacion.centro,
+                      "¡Ah, has vuelto! Era hora,");
+        id_l2 = write(fuente.fichero, cx, cy + 4, fuente.alineacion.centro,
+                      "humano. ¡No me hagas esperar!");
+    END
+
+    // Esperamos a que el jugador pulse ENTER/SPACE
+    WHILE (NOT (key(_enter) OR key(_space)))
+        FRAME;
+    END
+
+    // On-release
+    WHILE (key(_enter) OR key(_space))
+        FRAME;
+    END
+
+    delete_text(id_l1);
+    delete_text(id_l2);
     return(0);
 END
