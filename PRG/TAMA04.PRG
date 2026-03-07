@@ -196,17 +196,7 @@ BEGIN
     // Inicializamos el menú
     init_menu();
 
-    // Usamos el proceso main como marco del cuadro de diálogo durante la intro
-    file  = fpg.hud;
-    graph = MARCO_DIALOGO;
-    x     = configuracion.pantalla.ancho / 2;
-    y     = configuracion.pantalla.alto - configuracion.cuadro_dialogo.alto / 2;
-
-    mostrar_mascota();  // lanzamos el sprite de Aisha antes de la intro
-
-    intro_aisha();      // presentación o saludo; bloquea hasta que el jugador pulsa ENTER/SPACE
-
-    graph = 0;          // quitamos el gráfico del proceso main
+    introduccion();     // prepara el marco, lanza la mascota y muestra la intro; bloquea hasta que el jugador confirma
 
     // Iniciamos los procesos que correrán en paralelo
     mostrar_hud();      // Información en pantalla
@@ -829,6 +819,25 @@ BEGIN
 
     normalizar_stats();
     guardar_partida();
+    return(0);
+END
+
+//------------------------------------------------------------------------------
+// FUNCTION: introduccion
+// DESCRIPCIÓN: Muestra el sprite de la mascota. Bloquea hasta que el jugador confirma.
+//------------------------------------------------------------------------------
+FUNCTION introduccion();
+BEGIN
+    file  = fpg.hud;
+    graph = MARCO_DIALOGO;
+    x     = configuracion.pantalla.ancho / 2;
+    y     = configuracion.pantalla.alto - configuracion.cuadro_dialogo.alto / 2;
+
+    mostrar_mascota();  // lanzamos el sprite de Aisha antes de la intro (PROCESS → paralelo)
+
+    intro_aisha();      // presentación o saludo; bloquea hasta que el jugador pulsa ENTER/SPACE
+
+    graph = 0;          // quitamos el gráfico del proceso main
     return(0);
 END
 
