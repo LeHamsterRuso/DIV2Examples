@@ -2,7 +2,7 @@
 // TITLE:       SAVESTAT.CPP
 // AUTHOR:      Sebastian J. MONCHO MAQUET
 // DATE:        03/06/2026
-// DESCRIPTION: DLL de savestates en memoria para DIV Games Studio 2
+// DESCRIPTION: DLL de savestates en memoria y disco para DIV Games Studio 2
 //
 // AutoLoad: funciona con cualquier juego sin modificarlo.
 //
@@ -14,41 +14,45 @@
 //   SS_SAVE(slot)  -> 1 si OK  (slot 1-5)
 //   SS_LOAD(slot)  -> 1 si OK  (slot 1-5)
 //
+// PERSISTENCIA EN DISCO:
+//   Los estados se guardan en SS1.DAT .. SS5.DAT (directorio de trabajo).
+//   Al arrancar el juego se cargan automaticamente en memoria; los estados
+//   guardados en sesiones anteriores estan disponibles desde el primer frame.
+//
 // QUE SE GUARDA (volcado plano, estilo emulador):
 //
 //   mem[long_header .. id_end_offset + process_size)
 //
 //   Cubre en un solo bloque contiguo:
-//     - Estructuras de sistema: SCROLL, MOUSE, M7, JOY... (posicion del scroll, camara)
+//     - Estructuras de sistema: SCROLL, MOUSE, M7, JOY...
 //     - Globales de sistema (timer, fps, restore_type...)
 //     - Globales de usuario (score, hp, nivel...)
-//     - Bloque completo de cada proceso: _reserved (ip, sp, status, x0/y0/x1/y1...),
-//       campos _process (x, y, graph, angle...) y variables locales.
+//     - Bloque completo de cada proceso: ip, sp, status, x, y, graph...
 //
-//   ip y sp SE RESTAURAN intencionadamente: en el momento del guardado los
-//   procesos estan suspendidos en FRAME con la pila limpia, asi que restaurar
-//   ip/sp hace que cada proceso retome exactamente donde se guardo.
+//   ip y sp SE RESTAURAN: los procesos se guardan suspendidos en FRAME
+//   (pila limpia), por lo que retoman exactamente donde se guardaron.
 //
-//   Los campos id e idscan (identidad del proceso, gestionados internamente
-//   por el motor) NO se restauran: se guardan antes del volcado y se reescriben
-//   despues para no desincronizar la tabla interna de IDs del motor.
+//   id e idscan NO se restauran: se preservan del estado actual para no
+//   desincronizar la tabla interna de IDs del motor.
 //
 //   palette[0..767]
 //
-// Refresco visual: flag clear_pending consumido en post_process_buffer.
+// FORMATO DE FICHERO:
+//   Cabecera: 6 ints  { magic='SSV1', total, last, ps, np, 0 }
+//   Cuerpo:   total*4 bytes (volcado de mem[])
+//   Paleta:   768 bytes
 //------------------------------------------------------------------------------
 
 #define GLOBALS
 #include "div.h"
 
 #define MAX_SLOTS       5
-#define SC_F1           59   // F1..F5  = scan codes 59..63  (guardar)
-#define SC_F6           64   // F6..F10 = scan codes 64..68  (cargar)
-#define MSG_FRAMES      60   // ~2 s a 30fps
-
-// Limite de slots de proceso que preservamos (id, idscan) al cargar.
-// 512 es mas que suficiente para cualquier juego DIV2.
+#define SC_F1           59
+#define SC_F6           64
+#define MSG_FRAMES      60
 #define MAX_PROC_SLOTS  512
+#define FILE_MAGIC      0x53535631   // 'SSV1'
+#define MAX_DUMP_INTS   400000       // limite de seguridad (~1.5 MB)
 
 static void *(*g_import)(char *name)          = 0;
 static void  (*g_export)(char *name, void *p) = 0;
@@ -59,16 +63,15 @@ static char prev_fkey[10];
 static int  msg_timer     = 0;
 static char msg_buf[24];
 
-// Buffers por ranura
-static int  *save_buf[MAX_SLOTS];   // volcado plano de mem[]
-static char *save_pal[MAX_SLOTS];   // paleta
-static int   save_total[MAX_SLOTS]; // ints en save_buf
-static int   save_last[MAX_SLOTS];  // id_end_offset+process_size al guardar
-static int   save_ps[MAX_SLOTS];    // process_size al guardar
-static int   save_np[MAX_SLOTS];    // num procesos al guardar
+static int  *save_buf[MAX_SLOTS];
+static char *save_pal[MAX_SLOTS];
+static int   save_total[MAX_SLOTS];
+static int   save_last[MAX_SLOTS];
+static int   save_ps[MAX_SLOTS];
+static int   save_np[MAX_SLOTS];
 static int   save_valid[MAX_SLOTS];
 
-// ---- String helpers ----
+// ---- String helpers (sin libc) ----
 static void sc_cpy(char *d, const char *s) { while (*s) *d++ = *s++; *d = 0; }
 static void sc_cat(char *d, const char *s) { while (*d) d++; while (*s) *d++ = *s++; *d = 0; }
 static void sc_itoa(int n, char *buf) {
@@ -78,8 +81,79 @@ static void sc_itoa(int n, char *buf) {
     while(i>0)buf[j++]=tmp[--i]; buf[j]=0;
 }
 
+// ---- Nombre de fichero por slot ----
+static char* slot_fname(int idx) {
+    static char name[] = "SS_.DAT";
+    name[2] = (char)('1' + idx);
+    return name;
+}
+
+// ---- Escribir slot a disco ----
+static void file_save(int idx) {
+    FILE *f;
+    int header[6];
+
+    if (!save_valid[idx] || !save_buf[idx] || !save_pal[idx]) return;
+
+    f = div_fopen(slot_fname(idx), "wb");
+    if (!f) return;
+
+    header[0] = FILE_MAGIC;
+    header[1] = save_total[idx];
+    header[2] = save_last[idx];
+    header[3] = save_ps[idx];
+    header[4] = save_np[idx];
+    header[5] = 0;
+
+    fwrite(header,         sizeof(int), 6,              f);
+    fwrite(save_buf[idx],  sizeof(int), save_total[idx], f);
+    fwrite(save_pal[idx],  1,           768,             f);
+
+    div_fclose(f);
+}
+
+// ---- Leer slot de disco al buffer en memoria ----
+static void file_load(int idx) {
+    FILE *f;
+    int header[6];
+    int total;
+
+    f = div_fopen(slot_fname(idx), "rb");
+    if (!f) return;
+
+    if (fread(header, sizeof(int), 6, f) != 6)       goto fail;
+    if (header[0] != FILE_MAGIC)                      goto fail;
+
+    total = header[1];
+    if (total <= 0 || total > MAX_DUMP_INTS)          goto fail;
+
+    if (save_total[idx] != total) {
+        if (save_buf[idx]) div_free(save_buf[idx]);
+        save_buf[idx]   = (int *)div_malloc(total * 4);
+        save_total[idx] = total;
+    }
+    if (!save_pal[idx])
+        save_pal[idx] = (char *)div_malloc(768);
+
+    if (!save_buf[idx] || !save_pal[idx])             goto fail;
+
+    if ((int)fread(save_buf[idx], sizeof(int), total, f) != total) goto fail;
+    if (fread(save_pal[idx], 1, 768, f) != 768)       goto fail;
+
+    save_last[idx]  = header[2];
+    save_ps[idx]    = header[3];
+    save_np[idx]    = header[4];
+    save_valid[idx] = 1;
+
+    div_fclose(f);
+    return;
+
+fail:
+    save_valid[idx] = 0;
+    div_fclose(f);
+}
+
 // ---- Guardar ----
-// Vuelca mem[long_header .. last) en un solo bloque plano.
 static int do_save(int slot) {
     int idx = slot - 1;
     int first, last, total, i;
@@ -88,11 +162,10 @@ static int do_save(int slot) {
     if (process_size <= 0) return 0;
 
     first = long_header;
-    last  = id_end_offset + process_size;   // exclusivo: primer int fuera del rango
+    last  = id_end_offset + process_size;
     total = last - first;
-    if (total <= 0) return 0;
+    if (total <= 0 || total > MAX_DUMP_INTS) return 0;
 
-    // Reasignar buffer si el layout cambio
     if (save_total[idx] != total) {
         if (save_buf[idx]) div_free(save_buf[idx]);
         save_buf[idx]   = (int *)div_malloc(total * 4);
@@ -101,22 +174,19 @@ static int do_save(int slot) {
     if (!save_pal[idx]) save_pal[idx] = (char *)div_malloc(768);
     if (!save_buf[idx] || !save_pal[idx]) return 0;
 
-    // Volcado plano
     for (i = 0; i < total; i++) save_buf[idx][i] = mem[first + i];
-
-    // Paleta
-    for (i = 0; i < 768; i++) save_pal[idx][i] = palette[i];
+    for (i = 0; i < 768;   i++) save_pal[idx][i] = palette[i];
 
     save_last[idx]  = last;
     save_ps[idx]    = process_size;
     save_np[idx]    = (id_end_offset - id_init_offset) / process_size + 1;
     save_valid[idx] = 1;
+
+    file_save(idx);   // persistir en disco
     return 1;
 }
 
 // ---- Cargar ----
-// Restaura el volcado plano, preservando id e idscan de cada proceso
-// para no desincronizar la tabla interna de IDs del motor DIV2.
 static int do_load(int slot) {
     int idx = slot - 1;
     int first, last, restore_end, total, cur_np, np, p, i;
@@ -129,7 +199,6 @@ static int do_load(int slot) {
     last  = save_last[idx];
     np    = save_np[idx];
 
-    // No escribir mas alla del bloque de procesos actual
     cur_np      = (id_end_offset - id_init_offset) / process_size + 1;
     restore_end = id_end_offset + process_size;
     if (last > restore_end) last = restore_end;
@@ -137,8 +206,7 @@ static int do_load(int slot) {
     total = last - first;
     if (total <= 0) return 0;
 
-    // Preservar id (offset 0) e idscan (offset 1) de cada slot actual,
-    // para no romper la tabla interna de IDs del motor.
+    // Preservar id e idscan actuales de cada slot
     int slots_to_keep = (cur_np < np) ? cur_np : np;
     if (slots_to_keep > MAX_PROC_SLOTS) slots_to_keep = MAX_PROC_SLOTS;
 
@@ -153,14 +221,13 @@ static int do_load(int slot) {
     // Restaurar volcado plano
     for (i = 0; i < total; i++) mem[first + i] = save_buf[idx][i];
 
-    // Volver a poner los id/idscan actuales
+    // Volver a poner id/idscan actuales
     for (p = 0; p < slots_to_keep; p++) {
         int base = id_init_offset + p * process_size;
         mem[base + 0] = kept_id[p];
         mem[base + 1] = kept_idscan[p];
     }
 
-    // Restaurar paleta
     for (i = 0; i < 768; i++) palette[i] = save_pal[idx][i];
 
     set_palette   = 1;
@@ -173,7 +240,6 @@ static int do_load(int slot) {
 void post_process_buffer(void) {
     if (!_wide || !_height || *_wide <= 0 || *_height <= 0 || !_buffer) return;
 
-    // Deteccion de teclas F1-F10 via key[] (estado fisico, valido aqui)
     if (ss_ok && _key) {
         int i;
         char num[4], txt[20];
@@ -203,14 +269,12 @@ void post_process_buffer(void) {
         char *vid = (char*)(*((unsigned long *)_buffer));
         if (!vid) return;
 
-        // Borrar buffer tras carga
         if (clear_pending) {
             int i, sz = *_wide * *_height;
             for (i = 0; i < sz; i++) vid[i] = 0;
             clear_pending = 0;
         }
 
-        // Mensaje de estado
         if (msg_timer > 0 && div_text_out) {
             msg_timer--;
             div_text_out(msg_buf, 2, *_height - 10);
@@ -254,6 +318,9 @@ void __export divmain(COMMON_PARAMS) {
     }
     for (i=0;i<10;i++) prev_fkey[i]=0;
     ss_ok=1; clear_pending=0; msg_timer=0;
+
+    // Cargar estados persistidos de sesiones anteriores
+    for (i=0;i<MAX_SLOTS;i++) file_load(i);
 
     DIV_export("post_process_buffer", post_process_buffer);
 
