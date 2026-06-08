@@ -1,0 +1,4 @@
+# CASTLE material
+newmtl Castle
+map_Kd CASTLE_TEX.png
+Kd 0.8 0.8 0.8
