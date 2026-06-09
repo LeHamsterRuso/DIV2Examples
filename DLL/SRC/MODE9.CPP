@@ -35,9 +35,18 @@
 //                               los billboards usan la ruta c_screen (1 vista).
 //   START_MODE9(camera,m9,reg)-> 1. Activa el render (firma como start_mode8).
 //                               camera=id del proceso camara; m9=&m9 (direccion
-//                               del STRUCT, ver nota); reg=region (solo 0).
-//                               Integra el BIND: la DLL lee m9.camera/height/
-//                               angle de &m9 cada frame.
+//                               del STRUCT, ver nota); reg=region: 0=pantalla
+//                               completa, n=region definida con MODE9_REGION
+//                               (varias llamadas = split por regiones, como las
+//                               ventanas de modo 8). Integra el BIND: la DLL lee
+//                               m9.camera/height/angle de &m9 cada frame.
+//   MODE9_REGION(n,x,y,w,h)   -> 1/0. Define el rect de la region n (1..15), como
+//                               define_region() pero para el modo 9. Usala con el
+//                               3er parametro de START_MODE9. La region 0 siempre
+//                               es la pantalla completa. w/h<=0 borra la region.
+//   MODE9_FOV(grados)         -> 0. Campo de vision horizontal (def ~71). 60=zoom,
+//                               90=amplio, 110=gran angular. Afecta a todas las
+//                               vistas. No tocar si quieres el valor por defecto.
 //   STOP_MODE9()              -> 0. Desactiva el render del escenario.
 //   MODE9_SCRW() / MODE9_SCRH() -> ancho / alto de la pantalla actual (px). Para
 //                               adaptar raton y viewports a cualquier resolucion.
@@ -48,6 +57,7 @@
 //                               STRUCT m9 del PRG.
 //   MODE9_CULL(modo)          -> 0. 0=sin culling, 1=caras traseras (def), 2=inv.
 //   MODE9_FARCLIP(dist)       -> 0. No dibujar mas alla de 'dist' uds DIV2 (0=off).
+//                               Afecta a poligonos del mundo, OBJ y billboards.
 //                               Con niebla se recorta ademas a fog_far.
 //   SET_ENV_COLOR9(r,g,b)     -> 0. Color de fondo/ambiente, 0..100 por canal
 //                               (convencion DIV2; 100=blanco).
@@ -58,6 +68,8 @@
 //                               (z-buffer, def), 0=dibujarlos siempre.
 //   MODE9_COLLISION(on)       -> 0. 1=advance/xadvance no atraviesan paredes
 //                               (usa el campo 'radius' del proceso camara), 0=off.
+//                               ON por defecto: solo hace falta llamarla con 0
+//                               si quieres DESACTIVAR las colisiones.
 //   MODE9_COLLIDE(pid)        -> 1/0. Empuja un proceso CUALQUIERA fuera de las
 //                               paredes (sliding) y reescribe su x,y. Para NPCs.
 //                               Devuelve 1 si lo movio. Usa su 'radius' (def 30).
@@ -141,6 +153,11 @@
 #define M9_FAST_FTOL 1        // Tier 1: float->int por "magic number" (version volatile)
 #define M9_USE_MIP   1        // Tier 2: mipmap de textura
 #define M9_USE_GRID  1        // Tier 3: rejilla espacial de culling
+#define M9_CORNER_SLIDE 1     // Colision: no "tapar" los extremos de pared en los
+                              // vertices interiores (juntas/esquinas) -> no atorarse.
+                              // 0 = comportamiento clasico (tapa radial en todo extremo).
+#define M9_COLLIDE_GRID 1     // Colision: rejilla espacial de paredes (solo prueba
+                              // las cercanas al jugador). 0 = recorrer todas (clasico).
 
 // ---- Offsets de campos dentro de un proceso (en ints, base = id) ------------
 // (derivados de _reserved[20] + campos de _process en div.h)
@@ -180,9 +197,15 @@ static int n_verts=0, n_uvs=0, n_tris=0;
 static int mesh_ok=0, has_uvs=0;
 
 // ---- Paredes para colision (footprint 2D en XZ + extension vertical) ---------
-typedef struct { float x0,z0,x1,z1, ymin,ymax; } M9Wall;
+// vi0/vi1 = indices de vertice (mesh_v) de los extremos del segmento.
+// cap0/cap1 = 1 si ese extremo genera "tapa" radial en la colision (extremo
+// libre / esquina real), 0 si es un vertice INTERIOR compartido por otra pared
+// (junta o esquina): omitir su tapa evita que el jugador se atore (M9_CORNER_SLIDE).
+typedef struct { float x0,z0,x1,z1, ymin,ymax; int vi0,vi1; unsigned char cap0,cap1; } M9Wall;
 static M9Wall mesh_walls[MAX_WALLS];
 static int    n_walls=0;
+static int    wall_vc[MAX_VERTS];    // nº de paredes que tocan cada grupo XZ (para cap0/cap1)
+static int    vgroup[MAX_VERTS];     // vertice -> representante de su grupo de coincidencia XZ
 
 // ---- Suelos para escalones y rampas (floor-following) -----------------------
 // Indices de los triangulos casi-horizontales (suelo/techo). floor_height() busca
@@ -306,6 +329,19 @@ static int  *tstamp=NULL;                 // (div_malloc) marca de frame por tri
 static int   tstamp_cap=0;
 static int   frame_stamp=0;
 
+// ---- Rejilla espacial de PAREDES (culling de colision) ----------------------
+// Reutiliza la geometria de celdas de la rejilla de render (grid_minx/cw/inv...).
+// Cada celda lista las paredes cuyo footprint la solapan; la colision solo prueba
+// las paredes de las celdas cercanas al jugador, no las n_walls enteras.
+static int   wgrid_start[GRID_CELLS+1];   // prefijos por celda
+static int  *wgrid_items=NULL;            // (div_malloc) indices de pared por celda
+static int   wgrid_cap=0;
+static int   wgrid_n=0;                    // 0 = sin rejilla de paredes (recorre todo)
+static int   wcand[MAX_WALLS];            // candidatos de la consulta de colision actual
+static int   n_wcand=0;
+static int   wstamp[MAX_WALLS];           // dedup: pared ya añadida en esta consulta
+static int   wstamp_frame=0;
+
 // ---- Transformacion de vertices PEREZOSA (lazy) -----------------------------
 // Solo se transforma/proyecta un vertice la primera vez que un triangulo VISIBLE
 // lo necesita (marcado con vstamp == frame_stamp). Asi, si la rejilla descarta
@@ -357,16 +393,30 @@ static int   m9_height   = 0;      // altura del ojo (uds DIV2)
 static int   m9_pitch    = 0;      // angulo vertical (milesimas de grado)
 static float m9_unitscale= 100.0f; // uds DIV2 por unidad OBJ
 static int   m9_bind     = 0;      // offset en mem[] del STRUCT m9 (0=no enlazado)
-static int   m9_region   = 0;      // region de pantalla (solo 0=pantalla completa)
+static int   m9_region   = 0;      // ultima region pasada a START_MODE9 (0=full)
 static int   m9_occlude  = 1;      // 1=ocultar billboards tras la geometria (z-buffer)
 static int   m9_ctype    = 200;    // valor de c_m9 (ctype de billboard automatico)
-static int   m9_collision= 0;      // 1=advance/xadvance no atraviesan paredes
+static int   m9_collision= 1;      // 1=advance/xadvance no atraviesan paredes (ON por defecto)
 static float far_clip    = 0.0f;   // distancia max de dibujo en uds OBJ (0=sin limite)
+// Constante focal: focal = ancho_viewport * m9_focal_k. Relacion con el FOV
+// horizontal: m9_focal_k = 0.5/tan(FOV/2). Por defecto FOCAL_K (~71 grados).
+// Se cambia con MODE9_FOV(grados); afecta a la proyeccion Y al culling de frustum.
+static float m9_focal_k  = FOCAL_K;
+
+// ---- Regiones de pantalla (como define_region + start_mode8) ----------------
+// La DLL no puede leer la tabla de regiones de DIV2, asi que mantiene la suya:
+// MODE9_REGION(n,x,y,w,h) registra el rectangulo de la region n (1..MAX_REGIONS-1)
+// y START_MODE9(cam,m9,n) lo usa como viewport. La region 0 es SIEMPRE la pantalla
+// completa (no se puede redefinir), igual que en start_mode8.
+#define MAX_REGIONS 16
+static int reg_def[MAX_REGIONS];                 // 1 = region n definida
+static int reg_x[MAX_REGIONS], reg_y[MAX_REGIONS], reg_w[MAX_REGIONS], reg_h[MAX_REGIONS];
 
 // ---- Viewports (split-screen): cada vista tiene su camara, su m9 y su rect ---
 // vw==0 (o vh==0) significa "pantalla completa" (se resuelve al renderizar).
 // lastx/lastz: ultima posicion valida de la camara (para colision con barrido).
-typedef struct { int active,cam,bind,vx,vy,vw,vh,haslast; float lastx,lastz; } M9View;
+// region: nº de region que sirve esta vista (-1 = ninguna; para reusar el slot).
+typedef struct { int active,cam,bind,vx,vy,vw,vh,haslast,region; float lastx,lastz; } M9View;
 static M9View views[MAX_VIEWS];
 
 // Estado para convertir los procesos c_m9 a c_screen y restaurarlos despues de
@@ -382,9 +432,9 @@ static int env_r=0, env_g=0, env_b=0;
 static char *fog_map = NULL;       // FOG_LEVELS * 256 bytes (remapeo de color)
 static int   fog_on  = 0;
 static float fog_near=0.0f, fog_far=1.0f;   // en uds OBJ
-// LUT de nivel de niebla indexada por profundidad cuantizada (zfix>>10, 0..63):
-// evita la division + comparaciones de fog_level() en el bucle de pixeles.
-static unsigned char fog_lvl_lut[64];
+// Factor (FOG_LEVELS-1)/(fog_far-fog_near): convierte profundidad -> nivel de
+// niebla con un solo multiplicar (evita la division de fog_level por pixel/seg).
+static float fog_scale=0.0f;
 
 // ---- Paleta original (para restaurar en divend) -----------------------------
 static char orig_pal[(PAL_SHADES+1) * 3];
@@ -560,26 +610,18 @@ static void build_fog_map(int fr,int fg,int fb){
     }
 }
 
-// Indice de nivel de niebla para una profundidad dada (uds OBJ)
+// Indice de nivel de niebla para una profundidad dada (uds OBJ). Lineal con la
+// DISTANCIA real (como el modo 8): 0 en fog_near, FOG_LEVELS-1 (opaco) en fog_far.
+// fog_scale = (FOG_LEVELS-1)/(fog_far-fog_near) se precalcula en set_fog9.
 static int fog_level(float depth){
     float t;
     if(!fog_on) return 0;
-    if(fog_far<=fog_near) return 0;
-    t=(depth-fog_near)/(fog_far-fog_near);
+    t=(depth-fog_near)*fog_scale;
     if(t<=0.0f) return 0;
-    if(t>=1.0f) return FOG_LEVELS-1;
-    return (int)(t*(float)(FOG_LEVELS-1)+0.5f);
-}
+    if(t>=(float)(FOG_LEVELS-1)) return FOG_LEVELS-1;
+    return fast_ftol(t);            // round-to-nearest rapido (evita el (int) lento
+                                    // de Watcom ~50-60 ciclos): t ya esta en [0,N) y >=0
 
-// Precalcula la LUT de niebla: para cada cubeta de profundidad (zfix>>10) guarda
-// el nivel de niebla correspondiente. Llamar cuando cambien near/far (set_fog9).
-static void build_fog_lut(void){
-    int i;
-    for(i=0;i<64;i++){
-        int zfix=(i<<10)+512;                  // zfix representativo de la cubeta
-        float w=(zfix>0)?(ZSCALE/(float)zfix):1e6f;   // w = 1/(zfix/ZSCALE)
-        fog_lvl_lut[i]=(unsigned char)fog_level(w);
-    }
 }
 
 // ============================================================================
@@ -591,7 +633,7 @@ static void build_fog_lut(void){
 static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
                     float xlf,float uwl,float vwl,float iwl,
                     float xrf,float uwr,float vwr,float iwr,
-                    char *tex,int tw,int th,int pow2,unsigned char flatcol){
+                    char *tex,int tw,int th,int pow2,int twsh,unsigned char flatcol){
     char *p;unsigned short *zp;float tf;
     float duw,dvw,diw,cuw,cvw,ciw,dx,subx;
     int xStart,xEnd;
@@ -641,20 +683,29 @@ static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
                 int stu=fast_ftol((tu1-tu0)*invseg*65536.0f);
                 int stv=fast_ftol((tv1-tv0)*invseg*65536.0f);
                 int zfix=fast_ftol(ciw*ZSCALE);            // resync por segmento (sin deriva)
-                int lv=fog_on?fog_lvl_lut[(zfix>>10)&63]:0;
+                // Niebla por la PROFUNDIDAD real del segmento (w0=1/ciw). Lineal con
+                // la distancia (como el modo 8); 1 nivel por tramo de cur_seg px.
+                int lv=fog_on?fog_level(w0):0;
                 char *fm=(lv>0)?&fog_map[lv*256]:0;
                 int k;
                 // Las ramas tex/fog/flat se sacan FUERA del bucle de pixeles:
                 // dentro solo queda el z-test + muestreo (sin condicionales).
+                // Desenrollado x2: la mitad de comparaciones/saltos de control del
+                // bucle por pixel (el cuerpo es corto, asi que el overhead pesaba).
+                #define M9_PIX(SAMPLE) \
+                    if(zfix>*zp){ *p=(SAMPLE); *zp=(unsigned short)zfix; } \
+                    p++; zp++; tu+=stu; tv+=stv; zfix+=zstep;
                 #define M9_SPAN(SAMPLE) \
-                    for(k=0;k<seg;k++){ \
-                        if(zfix>*zp){ *p=(SAMPLE); *zp=(unsigned short)zfix; } \
-                        p++; zp++; tu+=stu; tv+=stv; zfix+=zstep; }
+                    { int _h=seg>>1; \
+                      while(_h--){ M9_PIX(SAMPLE) M9_PIX(SAMPLE) } \
+                      if(seg&1){ M9_PIX(SAMPLE) } }
                 if(tex){
                     if(pow2){
-                        // Sin clamp: AND con mascara (textura potencia de 2).
-                        if(fm){ M9_SPAN(fm[(unsigned char)tex[((tv>>16)&thm)*tw+((tu>>16)&twm)]]) }
-                        else  { M9_SPAN(tex[((tv>>16)&thm)*tw+((tu>>16)&twm)]) }
+                        // Sin clamp: AND con mascara (textura potencia de 2). El
+                        // offset de fila usa SHIFT (twsh=log2(tw)) en vez de un imul
+                        // por pixel: ~10-40 ciclos menos por pixel en 486 (bit-exacto).
+                        if(fm){ M9_SPAN(fm[(unsigned char)tex[(((tv>>16)&thm)<<twsh)+((tu>>16)&twm)]]) }
+                        else  { M9_SPAN(tex[(((tv>>16)&thm)<<twsh)+((tu>>16)&twm)]) }
                     } else {
                         // Fallback con clamp (textura no potencia de 2).
                         for(k=0;k<seg;k++){
@@ -676,6 +727,7 @@ static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
                     M9_SPAN((char)pxf)
                 }
                 #undef M9_SPAN
+                #undef M9_PIX
                 cuw=cuw_e; cvw=cvw_e; ciw=ciw_e;
             }
             xi+=seg;
@@ -699,14 +751,17 @@ static void raster_tri_z(char *vid,unsigned short *zb,int W,int H,
     float x1,float y1,float u1,float v1,float w1,
     float x2,float y2,float u2,float v2,float w2,
     char *tex,int tw,int th,unsigned char flatcol){
-    int pow2,y,yA,yB;float tf;
+    int pow2,y,yA,yB,twsh=0;float tf;
     float iw0,iw1,iw2,uw0,vw0,uw1,vw1,uw2,vw2;
 
     // w no puede bajar de NEAR_PLANE: garantiza 1/w*ZSCALE <= 65535 (z 16 bits).
     if(w0<NEAR_PLANE)w0=NEAR_PLANE; if(w1<NEAR_PLANE)w1=NEAR_PLANE; if(w2<NEAR_PLANE)w2=NEAR_PLANE;
     cur_seg = m9_texseg;
     pow2=(tex && (tw&(tw-1))==0 && (th&(th-1))==0);
-    iw0=1.0f/w0; iw1=1.0f/w1; iw2=1.0f/w2;
+    if(pow2){int t2=tw; while(t2>1){t2>>=1;twsh++;}}   // log2(tw) para el shift por pixel
+    // 1/w de los 3 vertices: reciproco rapido (bit-hack) en vez de division FPU.
+    // w>=NEAR_PLANE (clampeado arriba), error ~0.05% (ya tolerado en todo el motor).
+    iw0=fast_recip(w0); iw1=fast_recip(w1); iw2=fast_recip(w2);
     uw0=u0*iw0; vw0=v0*iw0;
     uw1=u1*iw1; vw1=v1*iw1;
     uw2=u2*iw2; vw2=v2*iw2;
@@ -725,32 +780,36 @@ static void raster_tri_z(char *vid,unsigned short *zb,int W,int H,
 
     {
     // Pendientes por unidad de Y (no por scanline): el borde se evalua en el
-    // CENTRO de cada scanline (cy=y+0.5), con division exacta, sin acumular.
-    float gxl=(x2-x0)/(y2-y0), gul=(uw2-uw0)/(y2-y0);   // arista larga 0->2
-    float gvl=(vw2-vw0)/(y2-y0), gil=(iw2-iw0)/(y2-y0);
+    // CENTRO de cada scanline (cy=y+0.5). Se calcula 1 reciproco por arista y se
+    // multiplica (4 mul) en vez de 4 divisiones FPU (~73 ciclos cada una en 486).
+    float ril=1.0f/(y2-y0);
+    float gxl=(x2-x0)*ril, gul=(uw2-uw0)*ril;   // arista larga 0->2
+    float gvl=(vw2-vw0)*ril, gil=(iw2-iw0)*ril;
 
     if(y1-y0>1e-4f){   // mitad superior: arista corta 0->1
-        float gxs=(x1-x0)/(y1-y0), gus=(uw1-uw0)/(y1-y0);
-        float gvs=(vw1-vw0)/(y1-y0), gis=(iw1-iw0)/(y1-y0);
+        float ris=1.0f/(y1-y0);
+        float gxs=(x1-x0)*ris, gus=(uw1-uw0)*ris;
+        float gvs=(vw1-vw0)*ris, gis=(iw1-iw0)*ris;
         yA=iceil(y0-0.5f); yB=iceil(y1-0.5f);
         if(yA<clip_y0)yA=clip_y0; if(yB>clip_y1)yB=clip_y1;
         for(y=yA;y<yB;y++){
             float cy=(float)y+0.5f, xl,ul,vl,il, xs,us,vs,is;
             edge_at(cy,y0,x0,uw0,vw0,iw0,gxl,gul,gvl,gil,&xl,&ul,&vl,&il);
             edge_at(cy,y0,x0,uw0,vw0,iw0,gxs,gus,gvs,gis,&xs,&us,&vs,&is);
-            hspan_z(vid,zb,W,H,y,xl,ul,vl,il,xs,us,vs,is,tex,tw,th,pow2,flatcol);
+            hspan_z(vid,zb,W,H,y,xl,ul,vl,il,xs,us,vs,is,tex,tw,th,pow2,twsh,flatcol);
         }
     }
     if(y2-y1>1e-4f){   // mitad inferior: arista corta 1->2 (la larga continua)
-        float gxs=(x2-x1)/(y2-y1), gus=(uw2-uw1)/(y2-y1);
-        float gvs=(vw2-vw1)/(y2-y1), gis=(iw2-iw1)/(y2-y1);
+        float ris=1.0f/(y2-y1);
+        float gxs=(x2-x1)*ris, gus=(uw2-uw1)*ris;
+        float gvs=(vw2-vw1)*ris, gis=(iw2-iw1)*ris;
         yA=iceil(y1-0.5f); yB=iceil(y2-0.5f);
         if(yA<clip_y0)yA=clip_y0; if(yB>clip_y1)yB=clip_y1;
         for(y=yA;y<yB;y++){
             float cy=(float)y+0.5f, xl,ul,vl,il, xs,us,vs,is;
             edge_at(cy,y0,x0,uw0,vw0,iw0,gxl,gul,gvl,gil,&xl,&ul,&vl,&il);
             edge_at(cy,y1,x1,uw1,vw1,iw1,gxs,gus,gvs,gis,&xs,&us,&vs,&is);
-            hspan_z(vid,zb,W,H,y,xl,ul,vl,il,xs,us,vs,is,tex,tw,th,pow2,flatcol);
+            hspan_z(vid,zb,W,H,y,xl,ul,vl,il,xs,us,vs,is,tex,tw,th,pow2,twsh,flatcol);
         }
     }
     }
@@ -829,6 +888,85 @@ static int build_grid(void){
     }
     grid_n=1;
     return 1;
+}
+
+// ============================================================================
+// Rejilla espacial de paredes: rango de celdas (XZ) que solapa un segmento-pared.
+// Usa la MISMA geometria de celdas que la rejilla de render (ya calculada).
+// ============================================================================
+static void wall_cellrange(int w,int *x0,int *x1,int *z0,int *z1){
+    float ax=mesh_walls[w].x0,bx=mesh_walls[w].x1;
+    float az=mesh_walls[w].z0,bz=mesh_walls[w].z1;
+    float mnx=ax<bx?ax:bx, mxx=ax>bx?ax:bx;
+    float mnz=az<bz?az:bz, mxz=az>bz?az:bz;
+    *x0=(int)((mnx-grid_minx)*grid_invcw); *x1=(int)((mxx-grid_minx)*grid_invcw);
+    *z0=(int)((mnz-grid_minz)*grid_invch); *z1=(int)((mxz-grid_minz)*grid_invch);
+    if(*x0<0)*x0=0; if(*x1>=GRID_DIM)*x1=GRID_DIM-1; if(*x1<*x0)*x1=*x0;
+    if(*z0<0)*z0=0; if(*z1>=GRID_DIM)*z1=GRID_DIM-1; if(*z1<*z0)*z1=*z0;
+}
+
+// Construye la rejilla de paredes. Requiere que la rejilla de render ya este hecha
+// (grid_n) para reutilizar su geometria de celdas. Devuelve 1 si OK, 0 si no
+// (entonces wgrid_n=0 y la colision recorre todas las paredes: fallback seguro).
+static int build_wall_grid(void){
+    int w,gx,gz,total=0;
+    static int wcur[GRID_CELLS];
+    wgrid_n=0;
+#if !M9_COLLIDE_GRID
+    return 0;
+#endif
+    if(n_walls<=0 || !grid_n) return 0;
+    for(w=0;w<=GRID_CELLS;w++) wgrid_start[w]=0;
+    for(w=0;w<n_walls;w++){
+        int x0,x1,z0,z1; wall_cellrange(w,&x0,&x1,&z0,&z1);
+        for(gz=z0;gz<=z1;gz++) for(gx=x0;gx<=x1;gx++){ wgrid_start[gz*GRID_DIM+gx+1]++; total++; }
+    }
+    if(total>wgrid_cap){
+        if(wgrid_items)div_free(wgrid_items);
+        wgrid_items=(int*)div_malloc((size_t)total*sizeof(int));
+        if(!wgrid_items){wgrid_cap=0;return 0;}
+        wgrid_cap=total;
+    }
+    for(w=1;w<=GRID_CELLS;w++) wgrid_start[w]+=wgrid_start[w-1];
+    for(w=0;w<GRID_CELLS;w++) wcur[w]=wgrid_start[w];
+    for(w=0;w<n_walls;w++){
+        int x0,x1,z0,z1; wall_cellrange(w,&x0,&x1,&z0,&z1);
+        for(gz=z0;gz<=z1;gz++) for(gx=x0;gx<=x1;gx++){ int c=gz*GRID_DIM+gx; wgrid_items[wcur[c]++]=w; }
+    }
+    {int i; for(i=0;i<MAX_WALLS;i++) wstamp[i]=0;}   // sin sellos rancios
+    wstamp_frame=0; wgrid_n=1;
+    return 1;
+}
+
+// Rellena wcand[] con las paredes cuyo footprint solapa el rectangulo XZ dado
+// (deduplicadas). Si no hay rejilla de paredes, devuelve TODAS (fallback).
+static void gather_walls(float minx,float minz,float maxx,float maxz){
+    n_wcand=0;
+#if M9_COLLIDE_GRID
+    if(wgrid_n){
+        int cx0=(int)((minx-grid_minx)*grid_invcw), cx1=(int)((maxx-grid_minx)*grid_invcw);
+        int cz0=(int)((minz-grid_minz)*grid_invch), cz1=(int)((maxz-grid_minz)*grid_invch);
+        int gx,gz;
+        // +1 celda de anillo: cubre que un empuje cruce a la celda vecina (las 2
+        // pasadas pueden mover al jugador algo mas alla de la caja metrica).
+        cx0--; cx1++; cz0--; cz1++;
+        if(cx0<0)cx0=0; if(cx1>=GRID_DIM)cx1=GRID_DIM-1;
+        if(cz0<0)cz0=0; if(cz1>=GRID_DIM)cz1=GRID_DIM-1;
+        if(cx1<cx0||cz1<cz0) return;   // caja fuera de la rejilla -> sin paredes cerca
+        wstamp_frame++;
+        for(gz=cz0;gz<=cz1;gz++) for(gx=cx0;gx<=cx1;gx++){
+            int c=gz*GRID_DIM+gx, s=wgrid_start[c], e=wgrid_start[c+1], k;
+            for(k=s;k<e;k++){
+                int w=wgrid_items[k];
+                if(wstamp[w]==wstamp_frame) continue;   // ya añadida (otra celda)
+                wstamp[w]=wstamp_frame;
+                wcand[n_wcand++]=w;
+            }
+        }
+        return;
+    }
+#endif
+    {int w; for(w=0;w<n_walls;w++) wcand[w]=w; n_wcand=n_walls;}
 }
 
 // ============================================================================
@@ -934,10 +1072,10 @@ static int load_obj_file(char *fname){
         if(n_walls>=MAX_WALLS) continue;            // pared (muro casi vertical)
         {
             // par de vertices mas separados en XZ -> extremos del segmento
-            float px[3],pz[3],py[3]; int j,e0=0,e1=1; float best=-1.0f;
-            px[0]=mesh_v[a].x;pz[0]=mesh_v[a].z;py[0]=mesh_v[a].y;
-            px[1]=mesh_v[b].x;pz[1]=mesh_v[b].z;py[1]=mesh_v[b].y;
-            px[2]=mesh_v[c].x;pz[2]=mesh_v[c].z;py[2]=mesh_v[c].y;
+            float px[3],pz[3],py[3]; int vidx[3],j,e0=0,e1=1; float best=-1.0f;
+            px[0]=mesh_v[a].x;pz[0]=mesh_v[a].z;py[0]=mesh_v[a].y;vidx[0]=a;
+            px[1]=mesh_v[b].x;pz[1]=mesh_v[b].z;py[1]=mesh_v[b].y;vidx[1]=b;
+            px[2]=mesh_v[c].x;pz[2]=mesh_v[c].z;py[2]=mesh_v[c].y;vidx[2]=c;
             for(j=0;j<3;j++){
                 int k=(j+1)%3;
                 float dxx=px[j]-px[k], dzz=pz[j]-pz[k], d=dxx*dxx+dzz*dzz;
@@ -945,14 +1083,49 @@ static int load_obj_file(char *fname){
             }
             mesh_walls[n_walls].x0=px[e0]; mesh_walls[n_walls].z0=pz[e0];
             mesh_walls[n_walls].x1=px[e1]; mesh_walls[n_walls].z1=pz[e1];
+            mesh_walls[n_walls].vi0=vidx[e0]; mesh_walls[n_walls].vi1=vidx[e1];
+            mesh_walls[n_walls].cap0=1; mesh_walls[n_walls].cap1=1;   // por defecto: extremo libre
             {float y0=py[0],y1=py[0],t; t=py[1];if(t<y0)y0=t;if(t>y1)y1=t;
              t=py[2];if(t<y0)y0=t;if(t>y1)y1=t;
              mesh_walls[n_walls].ymin=y0; mesh_walls[n_walls].ymax=y1;}
             n_walls++;
         }
     }
+    // Tapas de extremo: un extremo que coincide (en XZ) con el de otra pared es
+    // INTERIOR (junta entre segmentos del mismo muro, esquina, jamba de puerta...).
+    // Quitarle la "tapa" radial evita el enganche al deslizar; la cara contigua ya
+    // frena. Solo los extremos REALMENTE aislados conservan su tapa.
+    // IMPORTANTE: se agrupa por POSICION XZ y no por indice de vertice, porque el
+    // mismo punto fisico (p.ej. arriba/abajo de una arista vertical, o el muro y el
+    // dintel de una puerta) suele tener varios indices de vertice distintos. Esa
+    // era la causa de los falsos bloqueos en los extremos del porton de la muralla.
+#if M9_CORNER_SLIDE
+    if(n_walls>0){
+        int wv,k; float eps2=0.02f*0.02f;   // ~2 uds DIV2 (unitscale 100): coincidencia XZ
+        // 1) agrupar vertices coincidentes en XZ -> representante (el mas temprano)
+        for(wv=0;wv<n_verts;wv++){
+            vgroup[wv]=wv;
+            for(k=0;k<wv;k++){
+                float dxx=mesh_v[wv].x-mesh_v[k].x, dzz=mesh_v[wv].z-mesh_v[k].z;
+                if(dxx*dxx+dzz*dzz<=eps2){ vgroup[wv]=vgroup[k]; break; }
+            }
+        }
+        // 2) contar extremos de pared por GRUPO de posicion
+        for(wv=0;wv<n_verts;wv++) wall_vc[wv]=0;
+        for(wv=0;wv<n_walls;wv++){
+            wall_vc[vgroup[mesh_walls[wv].vi0]]++;
+            wall_vc[vgroup[mesh_walls[wv].vi1]]++;
+        }
+        // 3) extremo en un grupo con >=2 paredes -> interior -> sin tapa radial
+        for(wv=0;wv<n_walls;wv++){
+            if(wall_vc[vgroup[mesh_walls[wv].vi0]]>1) mesh_walls[wv].cap0=0;
+            if(wall_vc[vgroup[mesh_walls[wv].vi1]]>1) mesh_walls[wv].cap1=0;
+        }
+    }
+#endif
     // Rejilla espacial XZ para el culling de triangulos por celdas (Tier 3).
     build_grid();
+    build_wall_grid();   // rejilla de paredes para acelerar la colision
     {char num[12];
      s_cpy(m9_msg,"M9 ");s_itos(n_tris,num);s_cat(m9_msg,num);
      s_cat(m9_msg,has_uvs?" tri+UV":" tri");}
@@ -1149,20 +1322,44 @@ static void mode9_loadfpg_fn(void){
 //            motor sabe donde vive m8); aqui, al ser m9 un struct del PRG, se
 //            pasa su DIRECCION: &m9 (o &m9[n] si usas un array de camaras). La
 //            DLL lee m9.camera/height/angle de ahi cada frame (integra el BIND).
-//   region : region de pantalla. Esta DLL solo soporta 0 (pantalla completa);
-//            no tiene acceso a la tabla de regiones de DIV2.
+//   region : region de pantalla, como en start_mode8.
+//            0 = PANTALLA COMPLETA: vista unica, desactiva el resto (clasico).
+//            n (1..15) = la region definida con MODE9_REGION(n,x,y,w,h): crea/
+//            actualiza una vista en ese rectangulo SIN tocar las demas regiones,
+//            de modo que puedes llamar START_MODE9 varias veces (una por region)
+//            para montar un split-screen al estilo "varias ventanas de modo 8".
+//            Si la region n no se definio aun, cae a pantalla completa.
 static void start_mode9_fn(void){
     int region=getparm();    // 3er arg
     int m9off =getparm();    // 2do arg: &m9
     int cam   =getparm();    // 1er arg: id de la camara
-    int i;
+    int i,slot;
     m9_camera=cam;
     if(m9off) m9_bind=m9off; // enlaza el struct (no hace falta MODE9_BIND aparte)
     m9_region=region;
-    // Vista unica a pantalla completa (view 0); desactivar el resto.
-    views[0].active=1; views[0].cam=cam; views[0].bind=m9off;
-    views[0].vx=0; views[0].vy=0; views[0].vw=0; views[0].vh=0; views[0].haslast=0;
-    for(i=1;i<MAX_VIEWS;i++) views[i].active=0;
+
+    if(region<=0 || region>=MAX_REGIONS || !reg_def[region]){
+        // --- Pantalla completa: vista unica (view 0), desactivar el resto -----
+        views[0].active=1; views[0].cam=cam; views[0].bind=m9off; views[0].region=0;
+        views[0].vx=0; views[0].vy=0; views[0].vw=0; views[0].vh=0; views[0].haslast=0;
+        for(i=1;i<MAX_VIEWS;i++) views[i].active=0;
+        m9_active=1;
+        retval(1);
+        return;
+    }
+
+    // --- Region con rectangulo: reusar el slot que ya servia esa region, o el
+    //     primer slot libre. No se tocan las demas vistas (split por regiones). --
+    slot=-1;
+    for(i=0;i<MAX_VIEWS;i++) if(views[i].active && views[i].region==region){slot=i;break;}
+    if(slot<0) for(i=0;i<MAX_VIEWS;i++) if(!views[i].active){slot=i;break;}
+    if(slot<0){ retval(0); return; }   // sin slots: no caben mas regiones
+    views[slot].active=1; views[slot].cam=cam; views[slot].bind=m9off; views[slot].region=region;
+    views[slot].vx=reg_x[region]; views[slot].vy=reg_y[region];
+    views[slot].vw=reg_w[region]; views[slot].vh=reg_h[region];
+    views[slot].haslast=0;
+    // El slot 0 manda en la ruta c_screen de billboards (1 sola vista de DIV2).
+    if(slot==0){ m9_camera=cam; if(m9off)m9_bind=m9off; }
     m9_active=1;
     retval(1);
 }
@@ -1176,13 +1373,14 @@ static void mode9_split_fn(void){
     if(slot<0||slot>=MAX_VIEWS){retval(0);return;}
     views[slot].active=1; views[slot].cam=cam; views[slot].bind=m9off;
     views[slot].vx=x; views[slot].vy=y; views[slot].vw=w; views[slot].vh=h;
-    views[slot].haslast=0;
+    views[slot].haslast=0; views[slot].region=-1;   // rect explicito (no por numero)
     if(slot==0){ m9_camera=cam; if(m9off)m9_bind=m9off; }  // primario (billboards)
     m9_active=1;
     retval(1);
 }
 // MODE9_COLLISION(on): 1=advance/xadvance no atraviesan paredes (usa el campo
-// radius del proceso camara como distancia minima a la pared), 0=libre (def).
+// radius del proceso camara como distancia minima a la pared), 0=libre.
+// Por defecto ON (1): llama con 0 solo si quieres atravesar paredes.
 static void mode9_collision_fn(void){
     m9_collision=getparm()?1:0;
     retval(0);
@@ -1226,9 +1424,37 @@ static void mode9_cull_fn(void){
     if(m>=0&&m<=2) cull_mode=m;
     retval(0);
 }
-// MODE9_FARCLIP(dist): no dibujar geometria mas alla de 'dist' (uds DIV2).
-// 0 = sin limite. Si hay niebla activa, ademas se recorta a fog_far (lo que
-// queda detras de la niebla es del color de fondo, no hace falta dibujarlo).
+// MODE9_FOV(grados): campo de vision HORIZONTAL en grados (def ~71). Valores
+// tipicos: 60 (mas "tele"/zoom), 90 (amplio), 110 (ojo de pez). El valor por
+// defecto se mantiene si no se llama. Afecta a la proyeccion y al frustum culling
+// (no a los billboards de la ruta c_screen de DIV2, que no proyecta la DLL).
+//   focal = ancho * 0.5/tan(FOV/2). Se aplica a TODAS las vistas/viewports.
+static void mode9_fov_fn(void){
+    int deg=getparm();
+    if(deg>=20&&deg<=150){
+        float r=(float)deg*(3.14159265f/180.0f)*0.5f;   // medio FOV en radianes
+        float t=(float)tan((double)r);
+        if(t>0.01f) m9_focal_k=0.5f/t;
+    }
+    retval(0);
+}
+// MODE9_REGION(n, x, y, w, h): define el rectangulo de la region n (1..15), igual
+// que define_region() de DIV2 pero para el modo 9 (la DLL no ve las regiones del
+// motor). Luego START_MODE9(cam, &m9, n) muestra esa camara dentro de la region.
+// La region 0 es siempre la pantalla completa y no se puede redefinir. Pasar w<=0
+// o h<=0 borra la region. Devuelve 1 si la registro, 0 si el numero no es valido.
+static void mode9_region_fn(void){
+    int h=getparm(),w=getparm(),y=getparm(),x=getparm(),n=getparm();
+    if(n<1||n>=MAX_REGIONS){retval(0);return;}
+    if(w<=0||h<=0){ reg_def[n]=0; retval(0); return; }
+    reg_x[n]=x; reg_y[n]=y; reg_w[n]=w; reg_h[n]=h; reg_def[n]=1;
+    retval(1);
+}
+// MODE9_FARCLIP(dist): no dibujar mas alla de 'dist' (uds DIV2). Recorta los
+// poligonos del mundo, los modelos OBJ (por su origen) y los billboards (por su
+// distancia a camara). 0 = sin limite. Si hay niebla activa, ademas se recorta a
+// fog_far (lo que queda detras de la niebla es del color de fondo, no hace falta
+// dibujarlo).
 static void mode9_farclip_fn(void){
     int d=getparm();
     far_clip=(d>0)?(float)d/m9_unitscale:0.0f;
@@ -1262,15 +1488,20 @@ static void set_env_color9_fn(void){
     if(fog_on) build_fog_map(env_r,env_g,env_b);
     retval(0);
 }
-// SET_FOG9(near, far): como set_fog del modo 8, solo near/far (uds DIV2). El
-// COLOR de la niebla es el de SET_ENV_COLOR9 (la niebla funde hacia el fondo).
+// SET_FOG9(near, far): niebla por distancia, como set_fog del modo 8. La niebla
+// crece LINEALMENTE con la distancia: transparente hasta 'near', y completamente
+// opaca (color de ambiente) en 'far'. El COLOR es el de SET_ENV_COLOR9.
+// DIFERENCIA con el modo 8: alli near/far son 0..100 (porcentaje); aqui son
+// DISTANCIAS ABSOLUTAS en uds DIV2 (mas precisas), p.ej. SET_FOG9(300,1400).
+// Como en el modo 8, lo habitual es far ~ 2*near.
 static void set_fog9_fn(void){
     int ffar=getparm(),fnear=getparm();    // rango en uds DIV2
     fog_near=(float)fnear/m9_unitscale;
     fog_far =(float)ffar /m9_unitscale;
     build_fog_map(env_r,env_g,env_b);      // color de niebla = color de ambiente
     fog_on=(fog_map!=NULL && fog_far>fog_near);
-    build_fog_lut();                        // LUT por profundidad (fog_on ya fijado)
+    // Pendiente niveles/unidad: nivel = (depth-fog_near)*fog_scale (ver fog_level).
+    fog_scale=(fog_far>fog_near)?((float)(FOG_LEVELS-1)/(fog_far-fog_near)):0.0f;
     retval(0);
 }
 static void mode9_fog_off_fn(void){
@@ -1343,18 +1574,29 @@ static int floor_height(float px,float pz,float ceil_y,float *fy){
 // ============================================================================
 static void collide_xz(float *cx,float *cz,float cy,float r,float feet,float step){
     float ylo=cy-PLAYER_BODY, yhi=cy+0.3f;   // franja vertical del jugador (OBJ)
-    float r2=r*r;
-    int pass,w;
+    float r2=r*r, reach=r*2.0f+0.01f;        // alcance: cubre las 2 pasadas + empuje
+    int pass,wi;
+    // Solo prueba las paredes cercanas (rejilla). reach=2r garantiza incluir toda
+    // pared a <=r del jugador tras los empujes de ambas pasadas (ver gather_walls).
+    gather_walls(*cx-reach,*cz-reach,*cx+reach,*cz+reach);
     for(pass=0;pass<2;pass++){               // 2 pasadas: resuelve esquinas
-        for(w=0;w<n_walls;w++){
+        for(wi=0;wi<n_wcand;wi++){
+            int w=wcand[wi];
             float ax,az,bx,bz,dx,dz,len2,t,px,pz,ox,oz,d2;
+            int atEnd;
             if(mesh_walls[w].ymax<ylo || mesh_walls[w].ymin>yhi) continue;
             if(step>0.0f && mesh_walls[w].ymax<=feet+step) continue;  // escalon: no bloquea
             ax=mesh_walls[w].x0; az=mesh_walls[w].z0;
             bx=mesh_walls[w].x1; bz=mesh_walls[w].z1;
             dx=bx-ax; dz=bz-az; len2=dx*dx+dz*dz;
             t = (len2>1e-9f) ? (((*cx-ax)*dx+(*cz-az)*dz)/len2) : 0.0f;
-            if(t<0.0f)t=0.0f; else if(t>1.0f)t=1.0f;
+            atEnd=0;
+            if(t<0.0f){t=0.0f; atEnd=1;} else if(t>1.0f){t=1.0f; atEnd=2;}
+            // El punto mas cercano cae en un EXTREMO (tapa radial). Si ese extremo
+            // es un vertice interior (cap=0), saltar: la pared contigua ya frena y
+            // asi no se atora en juntas/esquinas (ver M9_CORNER_SLIDE).
+            if(atEnd==1 && !mesh_walls[w].cap0) continue;
+            if(atEnd==2 && !mesh_walls[w].cap1) continue;
             px=ax+dx*t; pz=az+dz*t;          // punto mas cercano del segmento
             ox=*cx-px; oz=*cz-pz; d2=ox*ox+oz*oz;
             if(d2<r2){
@@ -1377,8 +1619,13 @@ static void collide_xz(float *cx,float *cz,float cy,float r,float feet,float ste
 static void collide_swept(float lx,float lz,float *cx,float *cz,float cy,float r,
                           float feet,float step){
     float ylo=cy-PLAYER_BODY, yhi=cy+0.3f;
-    int w;
-    for(w=0;w<n_walls;w++){
+    float mnx=lx<*cx?lx:*cx, mxx=lx>*cx?lx:*cx;     // AABB del segmento de movimiento
+    float mnz=lz<*cz?lz:*cz, mxz=lz>*cz?lz:*cz;
+    float m=r+0.01f;
+    int wi;
+    gather_walls(mnx-m,mnz-m,mxx+m,mxz+m);          // solo paredes que cruza el barrido
+    for(wi=0;wi<n_wcand;wi++){
+        int w=wcand[wi];
         float ax,az,ex,ez,el2,nx,nz,nl,dl,dc,t,ix,iz,st,target,denom;
         if(mesh_walls[w].ymax<ylo||mesh_walls[w].ymin>yhi)continue;
         if(step>0.0f && mesh_walls[w].ymax<=feet+step)continue;   // escalon: no bloquea
@@ -1397,7 +1644,16 @@ static void collide_swept(float lx,float lz,float *cx,float *cz,float cy,float r
         t=(dl-target)/denom; if(t<0.0f)t=0.0f; else if(t>1.0f)t=1.0f;
         ix=lx+(*cx-lx)*t; iz=lz+(*cz-lz)*t;
         st=((ix-ax)*ex+(iz-az)*ez)/el2;  // ¿el cruce cae dentro del segmento?
-        if(st>=-0.15f&&st<=1.15f){ *cx=ix; *cz=iz; }
+        // Dentro del segmento: frena siempre. Mas alla de un extremo: solo si ese
+        // extremo es una esquina REAL (cap=1); si es interior (junta/jamba, cap=0)
+        // no frena, para no crear falsos bloqueos en los bordes del porton.
+        {
+            int ok;
+            if(st>=0.0f&&st<=1.0f) ok=1;
+            else if(st<0.0f)       ok=(mesh_walls[w].cap0 && st>=-0.15f);
+            else                   ok=(mesh_walls[w].cap1 && st<= 1.15f);
+            if(ok){ *cx=ix; *cz=iz; }
+        }
     }
 }
 
@@ -1825,7 +2081,7 @@ static void render_sky(int vx,int vy,int vw,int vh,float focal,float hh,
 // vista actual. Usa los parametros de camara globales (g_*) ya establecidos
 // por render_view. Reutiliza tsort[]/order[]/bcnt[] (el sort del mundo ya
 // termino) y el z-buffer existente -> oclusion correcta con la geometria estatica.
-static void render_obj9_instances(char *vid,int W,int H){
+static void render_obj9_instances(char *vid,int W,int H,float fcull){
     int qi;
     (void)H;
     if(!n_obj9_queue) return;
@@ -1835,6 +2091,14 @@ static void render_obj9_instances(char *vid,int W,int H){
         int i,ti,ndraw=0;
         float iys=inst->ysin,iyc=inst->ycos;
         float ix=inst->ix,iy=inst->iy,iz=inst->iz;
+        // Far clip por objeto: descartar la instancia entera si su ORIGEN esta
+        // mas lejos que fcull (misma distancia a la que desaparecen los poligonos
+        // del mundo). Barato: 1 transform del centro, no de cada vertice.
+        if(fcull>0.0f){
+            float dx=ix-g_Cx, dz=iz-g_Cz;
+            float oz=(dx*g_ycos-dz*g_ysin)*g_pcos + (iy-g_Cy)*g_psin;
+            if(oz>fcull) continue;
+        }
         char *mtex=mdl->tex;
         int   mtw=mdl->tw,mth=mdl->th;
         char *mmip=mdl->mip;
@@ -2052,7 +2316,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
 
     {int yi=(int)(yaw*TRIG_K)&TRIG_MASK; ysin=sin_tab[yi]; ycos=cos_tab[yi];}
     {int pi2=(int)(pitch*TRIG_K)&TRIG_MASK; psin=sin_tab[pi2]; pcos=cos_tab[pi2];}
-    focal=(float)vw*FOCAL_K; hw=(float)vx+(float)vw*0.5f; hh=(float)vy+(float)vh*0.5f;
+    focal=(float)vw*m9_focal_k; hw=(float)vx+(float)vw*0.5f; hh=(float)vy+(float)vh*0.5f;
 
     // Distancia de corte (far clip): far_clip y, si hay niebla, fog_far (lo que
     // queda detras de la niebla es color de fondo, no hace falta dibujarlo).
@@ -2096,7 +2360,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
     ndraw=0;
     if(grid_n){
         int gx,gz;
-        float fk=0.5f/FOCAL_K;        // tan(medio FOV horizontal)
+        float fk=0.5f/m9_focal_k;     // tan(medio FOV horizontal)
         for(gz=0;gz<GRID_DIM;gz++){
             float ccz=grid_minz+((float)gz+0.5f)*grid_ch;
             for(gx=0;gx<GRID_DIM;gx++){
@@ -2265,7 +2529,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
 
     // --- Objetos 3D (DRAW_OBJ9): renderizar despues del mundo para que el
     //     z-buffer ya tenga la geometria estatica y la oclusion sea correcta. ---
-    render_obj9_instances(vid,W,H);
+    render_obj9_instances(vid,W,H,fcull);
 
     // --- Billboards dibujados por la DLL en ESTE viewport (multi-vista) -------
     // Solo si hay un FPG cargado en la DLL (MODE9_LOADFPG). Cada proceso c_m9 se
@@ -2283,6 +2547,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
             Py=(float)mem[b+P_Z]/m9_unitscale;
             world_to_cam(Px,Py,Pz,Cx,Cy,Cz,ysin,ycos,psin,pcos,&ocx,&ocy,&ocz);
             if(ocz<NEAR_PLANE) continue;
+            if(fcull>0.0f && ocz>fcull) continue;   // far clip: igual que la geometria
             // grafico: angular (xgraph) segun ESTA vista, o el graph del proceso
             {int xg=mem[b+P_XGRAPH];
              if(xg&&mem[xg]>0){
@@ -2299,7 +2564,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
             inv=fast_recip(ocz);
             {int scx=fast_ftol(hw+ocx*focal*inv), scy=fast_ftol(hh-ocy*focal*inv);
              // El tamaño debe escalar con la resolucion igual que la geometria
-             // (que proyecta con focal=vw*FOCAL_K). 320 = ancho de referencia
+             // (que proyecta con focal=vw*m9_focal_k). 320 = ancho de referencia
              // donde size=100 esta calibrado. Sin esto, los billboards encogen
              // (en pixeles fijos) al subir la resolucion.
              int sp9=fast_ftol(100.0f*inv*((float)vw/320.0f)); int fin,zfix;
@@ -2371,7 +2636,12 @@ static int project_world(int wx,int wy,int wz,int *sx,int *sy,int *depthu,int *s
     Px=(float)wx/m9_unitscale; Pz=(float)wy/m9_unitscale; Py=(float)wz/m9_unitscale;
     world_to_cam(Px,Py,Pz,Cx,Cy,Cz,ysin,ycos,psin,pcos,&ocx,&ocy,&ocz);
     if(ocz<NEAR_PLANE)return 0;
-    focal=(float)W*FOCAL_K; hw=(float)W*0.5f; hh=(float)H*0.5f;
+    // Far clip: oculto (mismo limite que la geometria del mundo; con niebla activa
+    // se recorta ademas a fog_far, lo que queda detras es del color de fondo).
+    {float fcull=far_clip;
+     if(fog_on&&fog_far>0.0f){ if(fcull<=0.0f||fog_far<fcull) fcull=fog_far; }
+     if(fcull>0.0f && ocz>fcull) return 0;}
+    focal=(float)W*m9_focal_k; hw=(float)W*0.5f; hh=(float)H*0.5f;
     w=ocz;
     *sx=(int)(hw+ocx*focal/w);
     *sy=(int)(hh-ocy*focal/w);
@@ -2783,6 +3053,8 @@ void __export divlibrary(LIBRARY_PARAMS){
     COM_export("MODE9_SET",       mode9_set_fn,       2);
     COM_export("MODE9_UNITSCALE", mode9_unitscale_fn, 1);
     COM_export("MODE9_CULL",      mode9_cull_fn,      1);
+    COM_export("MODE9_FOV",       mode9_fov_fn,       1);
+    COM_export("MODE9_REGION",    mode9_region_fn,    5);
     COM_export("MODE9_FARCLIP",   mode9_farclip_fn,   1);
     COM_export("MODE9_BIND",      mode9_bind_fn,      1);
     COM_export("SET_ENV_COLOR9",  set_env_color9_fn,  3);
@@ -2823,12 +3095,15 @@ void __export divmain(COMMON_PARAMS){
 
     m9_active=0;m9_camera=0;m9_height=0;m9_pitch=0;m9_unitscale=100.0f;
     m9_bind=0;m9_region=0;m9_occlude=1;m9_ctype=200;far_clip=0.0f;cull_mode=1;
-    m9_collision=0;n_walls=0;m9_downscale=1;m9_texseg=TEX_SEG;
+    m9_collision=1;n_walls=0;m9_downscale=1;m9_texseg=TEX_SEG;   // colisiones ON por defecto
+    m9_focal_k=FOCAL_K;fog_scale=0.0f;
     m9_step=0.0f;n_floors=0;
     grid_n=0;frame_stamp=0;
     grid_items=NULL;grid_cap=0;tstamp=NULL;tstamp_cap=0;
+    wgrid_items=NULL;wgrid_cap=0;wgrid_n=0;wstamp_frame=0;n_wcand=0;
     for(i=0;i<MAX_VERTS;i++) vstamp[i]=0;   // sin sellos rancios entre ejecuciones
-    for(i=0;i<MAX_VIEWS;i++){views[i].active=0;views[i].haslast=0;}
+    for(i=0;i<MAX_VIEWS;i++){views[i].active=0;views[i].haslast=0;views[i].region=-1;}
+    for(i=0;i<MAX_REGIONS;i++) reg_def[i]=0;   // sin regiones definidas
     n_m9spr=0;n_fpgspr=0;
     {int m; for(m=0;m<MAX_MATS;m++){mat_data[m]=NULL;mat_w[m]=mat_h[m]=0;mat_mip[m]=NULL;matm_w[m]=matm_h[m]=0;}}
     n_mats=1;
@@ -2887,6 +3162,7 @@ void __export divend(COMMON_PARAMS){
     n_obj9_models=0;n_obj9_queue=0;
     if(sky_data){div_free(sky_data);sky_data=NULL;sky_w=sky_h=0;sky_on=0;}
     if(grid_items){div_free(grid_items);grid_items=NULL;grid_cap=0;}
+    if(wgrid_items){div_free(wgrid_items);wgrid_items=NULL;wgrid_cap=0;wgrid_n=0;}
     if(tstamp){div_free(tstamp);tstamp=NULL;tstamp_cap=0;}
     if(fog_map){div_free(fog_map);fog_map=NULL;}
     if(zbuf){div_free(zbuf);zbuf=NULL;zbuf_w=zbuf_h=0;}

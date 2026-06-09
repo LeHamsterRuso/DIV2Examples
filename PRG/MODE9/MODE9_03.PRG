@@ -1,12 +1,12 @@
 //------------------------------------------------------------------------------
 // TITLE:       MODE9.PRG
 // AUTHOR:      Sebastian J. MONCHO MAQUET
-// DATE:        06/06/2026
+// DATE:        07/06/2026
 // DESCRIPTION: Ejemplo del "modo 9": desplazamiento por un escenario 3D (.OBJ)
 //              con camara en primera persona (estilo Doom / Elder Scrolls Arena)
 //              usando MODE9.DLL. Sobre el escenario se ven objetos 2D como en
 //              el modo 7 (sprites con escala segun distancia, aka "billboards").
-//              Este RPG es identico al MODE9_01.PRG pero con billboards (gráficos 2D estilo mode7)
+//              Este RPG es identico al MODE9_02.PRG, pero con un gato 3D en la entrada del castillo.
 //
 // CONTROLES:
 //   W / S         : avanzar / retroceder (SHIFT = correr)
@@ -55,8 +55,11 @@ GLOBAL
     END
     scr_x;                // resolucion real (la lee la DLL): raton/camara a
     scr_y;                // cualquier resolucion, no solo 320x200
+    cat_h;                // handle del modelo 3D del gato (LOAD_OBJ9)
 BEGIN
-    // ignore_error(142); // Descomentar si tarda en arrancar en tu PC
+    // Es probable que los assets tarden en cargar en hardware real.
+    // Si te salta la expcion 142, puedes decomentar esta linea para ignorarla.
+    //ignore_error(142); 
 
     set_mode(SCREEN_X * 1000 + SCREEN_Y);
     set_fps(GAME_FPS, 0);
@@ -71,54 +74,78 @@ BEGIN
     // --- Cargar el escenario 3D (UNA sola llamada: malla + textura + escala) --
     // LOAD_WLD9(obj, textura, unitscale).  unitscale = 100 uds DIV2 por unidad
     // OBJ. Si la textura no existe (o pones ""), el render cae a flat-shading.
-    // La textura de LOAD_WLD9 es el material 0 (POR DEFECTO de todos los materiales).
+    // La textura de LOAD_WLD9 es el material 0 y se aplica por defecto a todos los materiales.
+    // Si cambias 100 por 200, el escenario será el doble de grande.
     LOAD_WLD9("CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
 
     // --- MULTIMATERIALES -----------------------------------------------------
     // CASTLE.OBJ tiene 3 materiales por 'usemtl' (en orden): 0=Castle, 1=Stairs,
     // 2=Water. MODE9_MATERIAL(idx, map) asigna una textura a cada uno. El 0 ya lo
-    // puso LOAD_WLD9 (CASTLE.MAP); aqui ponemos la escalera y el lago. Si un .MAP
+    // puso LOAD_WLD9 (CASTLE.MAP); aqui ponemos la escalera y el mar. Si un .MAP
     // no existe aun, ese material cae al 0 (CASTLE.MAP) sin fallar.
     MODE9_MATERIAL(1, "MAP/STAIRS.MAP");   // peldanos de la escalera del patio
-    MODE9_MATERIAL(2, "MAP/WATER.MAP");    // lago que rodea la isla
+    MODE9_MATERIAL(2, "MAP/WATER.MAP");    // agua que rodea la isla
 
-    // MODE9_CULL(0); // Desactivar el backface culling (dibujar las caras por ambas caras; mas lento)
+    // MODE9_CULL(1) activa el backface culling (no dibujar las caras que se ven por detras; mas rapido).
+    // Por defecto está activado. Si deseseas desactivarlo haz MODE9_CULL(0);
+    //MODE9_CULL(0);
 
-    //MODE9_PERSPECTIVE(1);   // <-- Corrige la perspectiva de las texturas (mas lento)
+    // MODE9_FOV cambia el campo de vision horizontal (FOV) en grados.
+    // El valor por defecto es ~71, que es el FOV "canonico" de los juegos 3D de la época
+    // Un valor menor (60) hace zoom, y un valor mayor (90 o 110) da un efecto de gran angular.
+    // Cambiar el FOV puede afectar la sensacion de velocidad y la distorsion de las texturas, asi que ajustalo a tu gusto.
+    //MODE9_FOV(90);
+
+    // MODE9_PERSPECTIVE(1) Corrige gran parte de los defectos gráficos de las texturas, pero impacta mucho en el rendimiento.
+    // Por defecto esta desactivado (0), lo que da un efecto de distorsion de las texturas.
+    //MODE9_PERSPECTIVE(1);
 
     // Far clip ("flopping"): no dibujar geometria mas alla de N uds DIV2.
-    // 0 = sin limite. Con SET_FOG9 activa se recorta automaticamente a fog_far
-    // (lo que queda tras la niebla es del color de fondo, no se dibuja).
-    MODE9_FARCLIP(0);
+    // Por defecto está a 0 (sin limite).
+    // Si activas niebla con SET_FOG9, se auto-activa el FARCLIP con el valor de 'far' de la niebla (lo que queda tras la niebla es del color de fondo, no se dibuja).
+    //MODE9_FARCLIP(1000);
 
-    // COLISIONES: con 1, advance/xadvance NO atraviesan las paredes (la distancia
-    // minima a la pared es el campo 'radius' del proceso camara). Con 0, libre.
-    MODE9_COLLISION(1);
+    // MODE9_COLLISION activa y desactiva las colisiones: con 1, advance/xadvance NO atraviesan las paredes (la distancia
+    // minima a la pared es el campo 'radius' del proceso camara). Con 0 puedes atravesar paredes.
+    //MODE9_COLLISION(0);
 
-    // ESCALERAS Y RAMPAS: altura max (uds DIV2) que la camara sube sola. Los muros
-    // mas bajos que esto NO bloquean (se suben como un peldaño) y la camara se apoya
+    // MODE9_STEP(INT X) se usa para subir escaleras y rampas.
+    // El valor es la altura max (uds DIV2) que la camara sube sola. Los muros
+    // mas bajos NO bloquean (se suben como un peldaño) y la camara se apoya
     // en el suelo que tiene debajo (rampas inclinadas, escalones). 0 = desactivado.
-    // La GRAVEDAD la aplica el PRG (ver el bloque de salto/gravedad de 'camara'); la
-    // DLL solo SUBE z al pisar un suelo. 50 uds = medio "metro" OBJ (unitscale=100).
+    // La DLL no aplica GRAVEDAD, la gravedad la tienes que gestionar en el PRG (ver el bloque de salto/gravedad de 'camara');
+    // Ojo, para que funcione las colisiones deben de estar activadas (no va con MODE9_COLLISION(0)).
     MODE9_STEP(70);
 
     // --- Ambiente y niebla (color en rango 0..100, convencion DIV2) ----------
     // SET_ENV_COLOR9 fija el color de FONDO y tambien el color de la NIEBLA.
-    // 0..100 por canal: 100=blanco, 0=negro. SET_FOG9 solo necesita near/far
-    // (igual que set_fog del modo 8): la niebla funde hacia el color de ambiente.
+    // 0..100 por canal: 100=blanco, 0=negro. SET_FOG9(near,far) funde hacia ese
+    // color crecientemente con la DISTANCIA: transparente hasta 'near' y opaco en
+    // 'far' (gradiente suave, como el modo 8). OJO: a diferencia del modo 8
+    // (0..100), aqui near/far son DISTANCIAS en uds DIV2; lo normal es far ~ 2*near.
     //SET_ENV_COLOR9(60, 72, 88);        // cielo amarillento, impacta en el color de la niebla
     //SET_FOG9(300, 1400);               // niebla: near=300  far=1400 (uds DIV2)
-    MODE9_FOG_OFF();
+
+    // Por defecto la niebla no está activada, pero si la activas luego la puedes
+    // desactivar con MODE9_FOG_OFF.
+    //MODE9_FOG_OFF();
 
     // --- Cielo panoramico (skybox) -------------------------------------------
     // LOAD_SKY9(map): textura .MAP que envuelve 360 en horizontal; sustituye el
-    // color de fondo plano. Gira con la camara (yaw) y se desplaza con el pitch.
-    // Debe usar la MISMA paleta que el juego (SKY.MAP se genero desde CASTLE.MAP
-    // con TOOLS/make_sky.py). SKY9_OFF() vuelve al fondo plano de SET_ENV_COLOR9.
+    // color de fondo plano (SET_ENV_COLOR9).
+    // Gira con la camara (yaw) y se desplaza con el pitch.
     LOAD_SKY9("MAP/SKY.MAP");
+
+    // --- NPC 3D estatico (objeto OBJ texturado en el mundo) ------------------
+    // LOAD_OBJ9(obj, textura, unitscale) carga UN modelo 3D estatico: la malla
+    // CAT.OBJ con su textura CAT.MAP, escala 50 (uds DIV2 por unidad OBJ). Ocupa
+    // un slot de los 8 de la DLL. El gato se vera quieto (sin animacion); para
+    // animarlo por vertex morphing se usaria LOAD_OBJ9_ANIM + DRAW_OBJ9_ANIM.
+    cat_h = LOAD_OBJ9("CAT.OBJ", "MAP/CAT.MAP", 50);
 
     // --- Procesos ------------------------------------------------------------
     camara();
+    NPC3D(cat_h, 400, -1300, 0);
     NPC(0, 600, 0);          // un sprite angular "modo 7" en el patio del castillo, representa un NPC
     M9TREE(600, -1300, 0);   // un sprite plano, representa un arbol
     M9TREE(-600, -1300, 0);  // un sprite plano, representa un arbol
@@ -127,6 +154,7 @@ BEGIN
     M9SIGN(300, -1200, 0);   // un cartel plano con textura
 
     write(0, 2, scr_y-9, 0, "WASD+RATON mover  ESPACIO salto  ESC salir");
+    write_int(0, 0, 0, 0, OFFSET fps);
 END
 
 
@@ -164,11 +192,16 @@ BEGIN
     //   region = 0 (pantalla completa; unica region soportada por la DLL).
     START_MODE9(id, &m9.z, 0);
 
-    //MODE9_DOWNSCALE(2); // Si va lento: render a menor resolucion (2/3/4) duplicando lineas (mas FPS, mas pixelado)
-    // Cada valor de downscale reduce la resolucion a 1/2, 1/3 o 1/4 (y duplica lineas para llenar la pantalla).
-    // 1 = resolucion completa (sin downscale); 2 = render a la mitad de resolucion (160x100 en vez de 320x200); 3 = un tercio; 4 = un cuarto.
+    //MODE9_DOWNSCALE(2) reduce la resolución del render del modo 9.
     // Es un truco empleado en juegos first person shooter de consolas de 16 bits
-
+    // Cada valor de downscale reduce la resolucion a 1/2, 1/3 o 1/4 (y duplica lineas para llenar la pantalla).
+    // 1 = resolucion completa (sin downscale, valor por defecto);
+    // 2 = render a la mitad de resolucion (si usas 320x200 -> Se aplica 160x100);
+    // 3 = un tercio (si usas 320x200 -> Se aplica 80x50);
+    // 4 = un cuarto (si usas 320x200 -> Se aplica 40x25);
+    // Acelera mucho el render a costa de una gran perdida de calidad (pixelado, texturas borrosas, mas aliasing). Ajustalo a tu gusto.
+    //MODE9_DOWNSCALE(2);
+    
     mouse_x_prev = mouse.x;
     fall_v   = 0;
     grounded = 1;
@@ -283,6 +316,30 @@ BEGIN
     angle = 0;
     x = wx; y = wy; z = wz;   // posicion en el MUNDO (el proceso la conserva)
     LOOP
+        FRAME;
+    END
+END
+
+//------------------------------------------------------------------------------
+// NPC3D: objeto 3D texturado en el mundo. Usa DRAW_OBJ9 cada frame para que la
+// DLL lo renderice como malla 3D (con z-buffer respecto al escenario).
+//   handle : devuelto por LOAD_OBJ9 (0 = modelo no cargado -> no dibuja nada)
+//   wx, wy : posicion inicial en el plano del suelo (uds DIV2)
+//   wz     : altura inicial (uds DIV2; 0 = al nivel del suelo)
+//
+// El proceso mantiene sus coordenadas (x,y,z,angle) como cualquier proceso DIV2:
+// puedes moverlo con advance(), cambiar angle, etc. en subclases.
+// DRAW_OBJ9(handle, x, y, z, angle) se llama antes de cada FRAME y dibuja el
+// modelo estatico (sin animacion: el gato se queda quieto).
+//------------------------------------------------------------------------------
+PROCESS NPC3D(handle, wx, wy, wz)
+BEGIN
+    x = wx; y = wy; z = wz;
+    angle = pi;    
+    LOOP
+        if (handle > 0)
+            DRAW_OBJ9(handle, x, y, z, angle);
+        end
         FRAME;
     END
 END
