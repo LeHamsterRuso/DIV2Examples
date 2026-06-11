@@ -76,6 +76,8 @@ BEGIN
     // OBJ. Si la textura no existe (o pones ""), el render cae a flat-shading.
     // La textura de LOAD_WLD9 es el material 0 y se aplica por defecto a todos los materiales.
     // Si cambias 100 por 200, el escenario será el doble de grande.
+    // La carga del escenario es bloqueante (hasta que no acabe la acción, no se continúa).
+    // Si cargas escenarios enormes, puede saltar al excepcion 142 ("El proceso parece bloqueado, esperando FRAME")
     LOAD_WLD9("CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
 
     // --- MULTIMATERIALES -----------------------------------------------------
@@ -142,6 +144,18 @@ BEGIN
     // un slot de los 8 de la DLL. El gato se vera quieto (sin animacion); para
     // animarlo por vertex morphing se usaria LOAD_OBJ9_ANIM + DRAW_OBJ9_ANIM.
     cat_h = LOAD_OBJ9("CAT.OBJ", "MAP/CAT.MAP", 50);
+    /*
+    // Los modelos se cargan en segundo plano, mientras se ejecuta el juego
+    // No obstante, con MODE9_OBJ9_READY puedes consultar si el modelo ha
+    // acabado de cargarse en memoria (1 = listo, 0 = aun cargando).
+    // Puede servir, por ejemplo, para hacer pantallas de carga
+    // Esto es opcional, puedes llamar a DRAW_OBJ9 o DRAW_OBJ9_ANIM con un handle aun no cargado (0) y simplemente no dibuja nada en ese FRAME.
+    // Pero ten en cuenta que, mientras el modelo se carga, el juego se ralentiza
+    write(0, SCREEN_X/2, SCREEN_Y/2, 4, "Cargando modelo 3D...");
+    while(MODE9_OBJ9_READY(cat_h) == 0)
+        FRAME;
+    END;
+    delete_text(ALL_TEXT);*/
 
     // --- Procesos ------------------------------------------------------------
     camara();

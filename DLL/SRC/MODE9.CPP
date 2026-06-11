@@ -236,6 +236,7 @@ typedef struct {
     int    nv, nuv, nt;
     char  *tex; int tw, th;  // textura MAP (NULL = flat)
     char  *mip; int mw, mh;  // mipmap 1/2 (LOD/cache)
+    int    ready;            // 0=cargando (en segundo plano), 1=listo, -1=fallo
 } Obj9Model;
 typedef struct {
     int   midx;              // indice en obj9_models[]
@@ -248,6 +249,30 @@ static Obj9Model obj9_models[MAX_OBJ9_MODELS];
 static int       n_obj9_models = 0;
 static Obj9Inst  obj9_queue[MAX_OBJ9_INST];
 static int       n_obj9_queue  = 0;
+
+// ---- Carga de modelos EN SEGUNDO PLANO (no bloqueante) ----------------------
+// LOAD_OBJ9/LOAD_OBJ9_ANIM reservan el slot, devuelven el handle al instante y
+// encolan un "job". obj9_pump() (en background_to_buffer, 1 fichero por frame)
+// va parseando: asi la carga no congela el juego ni dispara el watchdog (err 142)
+// con animaciones de muchos frames. El modelo no se dibuja hasta ready==1; las
+// instancias DRAW_OBJ9 de un modelo aun no listo se ignoran (aparece al cargar).
+// No es multihilo (DOS es monohilo): es streaming troceado entre frames.
+#define OBJ9_KIND_STATIC 0
+#define OBJ9_KIND_ANIM   1
+typedef struct {
+    int   midx;              // slot del modelo destino
+    int   kind;              // OBJ9_KIND_STATIC / OBJ9_KIND_ANIM
+    char  oname[64];         // OBJ (static) o base de la anim ("CAT" -> CATn.OBJ)
+    char  tname[64];         // textura MAP ("" = flat)
+    float sfac;              // escala (uds DIV2 por unidad OBJ)
+    int   nframes;           // fotogramas (anim)
+    int   step;              // estado: 0=topologia/frame0, 1..nf-1=frame, nf=textura
+    V3   *block;             // bloque de fotogramas en construccion (anim)
+    int   nv;                // nº de vertices del frame 0 (anim)
+} Obj9Job;
+static Obj9Job   obj9_jobs[MAX_OBJ9_MODELS];   // FIFO; como mucho 1 job por modelo
+static int       n_obj9_jobs   = 0;            // jobs encolados
+static int       obj9_job_head = 0;            // job en proceso (avanza al terminar)
 // Scratch de transformacion para el modelo en curso (reutilizado por instancia)
 static float     obj9cv[MAX_OBJ9V][3];  // espacio camara
 static float     obj9px[MAX_OBJ9V];     // pantalla subpixel X
@@ -2793,7 +2818,10 @@ static void mode9_project_fn(void){
 // (estilo modo 7). Asi los billboards quedan delante del escenario.
 // Tras pintar el escenario (y rellenar el z-buffer), se preparan los billboards
 // c_m9: se proyectan y se convierten a c_screen para que DIV2 los pinte.
+static void obj9_pump(void);   // carga incremental de modelos (definida mas abajo)
+
 void background_to_buffer(void){
+    obj9_pump();        // carga de modelos OBJ en segundo plano (1 fichero/frame)
     do_render();
     // Si hay un FPG cargado en la DLL, los billboards los dibuja la propia DLL
     // en cada viewport (multi-vista, ver render_view). Si no, se usa la ruta
@@ -2886,30 +2914,34 @@ static void load_obj9_texture(Obj9Model *mdl,char *tname){
 //   obj   : fichero .OBJ del modelo (Y-up, triangulado; UVs opcionales).
 //   tex   : textura .MAP ("" = flat-shading con la rampa de sombreado del mundo).
 //   scale : uds DIV2 por unidad OBJ del modelo (igual que unitscale en LOAD_WLD9).
-// Devuelve handle 1..MAX_OBJ9_MODELS (0 si fallo o sin slots libres).
-// Los modelos se conservan hasta STOP_MODE9/divend; no hace falta recargar
-// en cada frame.
+// Devuelve el handle 1..MAX_OBJ9_MODELS al INSTANTE (0 si no hay slots libres);
+// la carga del fichero se hace EN SEGUNDO PLANO (no bloquea, ver obj9_pump). El
+// modelo no se dibuja hasta que termina: DRAW_OBJ9 lo ignora mientras carga (el
+// objeto aparece solo al estar listo). Usa MODE9_OBJ9_READY(handle) si necesitas
+// saber cuando esta. Los modelos se conservan hasta STOP_MODE9/divend.
 // ============================================================================
 static void load_obj9_fn(void){
     int scale  =getparm();
     int tex_off=getparm();
     int obj_off=getparm();
-    char oname[64],tname[64];
-    Obj9Model *mdl;
-    float sfac;
-    div2c(obj_off,oname,sizeof(oname));
-    div2c(tex_off,tname,sizeof(tname));
-    if(n_obj9_models>=MAX_OBJ9_MODELS){retval(0);return;}
-    mdl=&obj9_models[n_obj9_models];
+    Obj9Model *mdl; Obj9Job *job; int midx;
+    // Reservar slot de modelo + slot de job; el parseo real lo hace obj9_pump().
+    if(n_obj9_models>=MAX_OBJ9_MODELS||n_obj9_jobs>=MAX_OBJ9_MODELS){retval(0);return;}
+    midx=n_obj9_models;
+    mdl=&obj9_models[midx];
     mdl->verts=NULL;mdl->vframes=NULL;mdl->nframes=1;mdl->uvs=NULL;mdl->tris=NULL;
     mdl->nv=mdl->nuv=mdl->nt=0;
     mdl->tex=NULL;mdl->tw=mdl->th=0;
     mdl->mip=NULL;mdl->mw=mdl->mh=0;
-    sfac=(scale>0)?((float)scale/m9_unitscale):1.0f;
-    if(!load_obj9_model(mdl,oname,sfac)){retval(0);return;}
-    load_obj9_texture(mdl,tname);
+    mdl->ready=0;                              // aun cargando (segundo plano)
     n_obj9_models++;
-    retval(n_obj9_models);   // handle 1-based; 0 = error
+    job=&obj9_jobs[n_obj9_jobs++];
+    job->midx=midx; job->kind=OBJ9_KIND_STATIC;
+    div2c(obj_off,job->oname,sizeof(job->oname));
+    div2c(tex_off,job->tname,sizeof(job->tname));
+    job->sfac=(scale>0)?((float)scale/m9_unitscale):1.0f;
+    job->nframes=1; job->step=0; job->block=NULL; job->nv=0;
+    retval(midx+1);   // handle 1-based, valido ya; el modelo aparece al cargar
 }
 
 // ============================================================================
@@ -2918,60 +2950,98 @@ static void load_obj9_fn(void){
 // base="CAT", nframes=10 -> CAT0.OBJ..CAT9.OBJ. Todos deben compartir topologia
 // (mismos triangulos/UVs y mismo numero de vertices); solo cambian las posiciones.
 // La animacion ocupa UN SOLO slot de los MAX_OBJ9_MODELS, sin importar nframes.
-// Devuelve handle 1..MAX_OBJ9_MODELS (0 si fallo). Animar con DRAW_OBJ9_ANIM.
+// Devuelve el handle al INSTANTE (0 si no hay slots); los nframes ficheros se
+// cargan EN SEGUNDO PLANO a razon de uno por frame (ya NO bloquea ni dispara el
+// watchdog/err 142, antes habia que tocar max_process_time). Animar con
+// DRAW_OBJ9_ANIM; consulta MODE9_OBJ9_READY(handle) si quieres esperar a que este.
 // ============================================================================
 static void load_obj9_anim_fn(void){
     int nframes=getparm();
     int scale  =getparm();
     int tex_off=getparm();
     int base_off=getparm();
-    char base[64],tname[64],fname[80];
-    Obj9Model *mdl;
-    float sfac;
-    V3 *block; int f,nv;
-    div2c(base_off,base,sizeof(base));
-    div2c(tex_off,tname,sizeof(tname));
+    Obj9Model *mdl; Obj9Job *job; int midx;
     if(nframes<1) nframes=1;
-    if(n_obj9_models>=MAX_OBJ9_MODELS){retval(0);return;}
-    mdl=&obj9_models[n_obj9_models];
+    // Reservar slot + job; los N fotogramas se parsean en obj9_pump() a razon de
+    // UNO por frame, asi una anim larga ya NO bloquea ni dispara el watchdog.
+    if(n_obj9_models>=MAX_OBJ9_MODELS||n_obj9_jobs>=MAX_OBJ9_MODELS){retval(0);return;}
+    midx=n_obj9_models;
+    mdl=&obj9_models[midx];
     mdl->verts=NULL;mdl->vframes=NULL;mdl->nframes=1;mdl->uvs=NULL;mdl->tris=NULL;
     mdl->nv=mdl->nuv=mdl->nt=0;
     mdl->tex=NULL;mdl->tw=mdl->th=0;
     mdl->mip=NULL;mdl->mw=mdl->mh=0;
-    sfac=(scale>0)?((float)scale/m9_unitscale):1.0f;
-    // Frame 0: parseo completo (topologia + frame 0 de vertices).
-    build_frame_name(fname,base,0);
-    if(!load_obj9_model(mdl,fname,sfac)){retval(0);return;}
-    nv=mdl->nv;
-    if(nframes>1){
-        // Reservar el bloque de todos los fotogramas y copiar el frame 0.
-        block=(V3*)div_malloc((size_t)((long)nv*nframes*sizeof(V3)));
-        if(block){
-            for(f=0;f<nv;f++) block[f]=mdl->verts[f];
-            div_free(mdl->verts);          // libera la copia de 1 frame
-            mdl->verts=block;mdl->vframes=block;mdl->nframes=nframes;
-            // Frames 1..nframes-1: solo posiciones, en su offset del bloque.
-            for(f=1;f<nframes;f++){
-                int got;
-                build_frame_name(fname,base,f);
-                got=load_obj9_verts_only(fname,block+(long)f*nv,nv,sfac);
-                // Si un frame falta o no cuadra en topologia, duplicar el frame 0
-                // (degrada a "sin movimiento" en vez de mostrar basura/crashear).
-                if(got!=nv){
-                    int j; V3 *dst=block+(long)f*nv;
-                    for(j=0;j<nv;j++) dst[j]=block[j];
-                }
-            }
-            // NOTA: cargar N frames en una sola llamada es lento en MS-DOS real;
-            // el PRG debe desactivar el watchdog (max_process_time=0) alrededor de
-            // esta llamada para evitar el error 142. No se puede ceder a FRAME
-            // desde dentro de un builtin.
-        }
-        // Si block==NULL nos quedamos con 1 frame: el modelo sigue siendo valido.
-    }
-    load_obj9_texture(mdl,tname);
+    mdl->ready=0;
     n_obj9_models++;
-    retval(n_obj9_models);
+    job=&obj9_jobs[n_obj9_jobs++];
+    job->midx=midx; job->kind=OBJ9_KIND_ANIM;
+    div2c(base_off,job->oname,sizeof(job->oname));
+    div2c(tex_off,job->tname,sizeof(job->tname));
+    job->sfac=(scale>0)?((float)scale/m9_unitscale):1.0f;
+    job->nframes=nframes; job->step=0; job->block=NULL; job->nv=0;
+    retval(midx+1);
+}
+
+// ============================================================================
+// obj9_pump: avanza la carga en segundo plano UN paso (un fichero) por llamada.
+// Se invoca 1 vez por frame desde background_to_buffer. Procesa los jobs en orden
+// (FIFO): el primer modelo encolado es el primero en estar listo. Al terminar un
+// job (exito o fallo) pasa al siguiente; cuando la cola se vacia, no hace nada.
+// ============================================================================
+static void obj9_pump(void){
+    Obj9Job *j; Obj9Model *mdl;
+    if(obj9_job_head>=n_obj9_jobs){            // cola vacia: resetear contadores
+        if(n_obj9_jobs){n_obj9_jobs=0;obj9_job_head=0;}
+        return;
+    }
+    j=&obj9_jobs[obj9_job_head];
+    mdl=&obj9_models[j->midx];
+
+    if(j->kind==OBJ9_KIND_STATIC){
+        if(j->step==0){
+            if(!load_obj9_model(mdl,j->oname,j->sfac)){ mdl->ready=-1; obj9_job_head++; return; }
+            j->step=1;                          // textura el frame siguiente
+        } else {
+            load_obj9_texture(mdl,j->tname);
+            mdl->ready=1; obj9_job_head++;       // modelo completo
+        }
+        return;
+    }
+
+    // ---- Animacion (vertex morphing): 1 fotograma por frame ----
+    if(j->step==0){
+        char fname[80];
+        build_frame_name(fname,j->oname,0);     // frame 0: topologia + posiciones
+        if(!load_obj9_model(mdl,fname,j->sfac)){ mdl->ready=-1; obj9_job_head++; return; }
+        j->nv=mdl->nv;
+        if(j->nframes>1){
+            // Bloque contiguo de los nframes; copiar el frame 0 y apuntarlo.
+            j->block=(V3*)div_malloc((size_t)((long)j->nv*j->nframes*sizeof(V3)));
+            if(j->block){
+                int f; for(f=0;f<j->nv;f++) j->block[f]=mdl->verts[f];
+                div_free(mdl->verts);            // libera la copia de 1 frame
+                mdl->verts=j->block; mdl->vframes=j->block; mdl->nframes=j->nframes;
+            } else {
+                j->nframes=1;                    // sin memoria: queda estatico (valido)
+            }
+        }
+        j->step=1;
+        return;
+    }
+    if(j->step < j->nframes){                    // frames 1..nframes-1: solo posiciones
+        int f=j->step, got; char fname[80];
+        build_frame_name(fname,j->oname,f);
+        got=load_obj9_verts_only(fname,j->block+(long)f*j->nv,j->nv,j->sfac);
+        if(got!=j->nv){                          // frame ausente/topologia distinta:
+            int x; V3 *dst=j->block+(long)f*j->nv;//   duplicar el 0 (sin movimiento)
+            for(x=0;x<j->nv;x++) dst[x]=j->block[x];
+        }
+        j->step++;
+        return;
+    }
+    // Ultimo paso: textura y listo.
+    load_obj9_texture(mdl,j->tname);
+    mdl->ready=1; obj9_job_head++;
 }
 
 // ============================================================================
@@ -2989,6 +3059,7 @@ static void draw_obj9_fn(void){
     int handle=getparm();
     Obj9Inst *inst; float ar; int ai;
     if(handle<1||handle>n_obj9_models||n_obj9_queue>=MAX_OBJ9_INST){retval(0);return;}
+    if(obj9_models[handle-1].ready!=1){retval(0);return;}   // aun cargando: no dibujar
     inst=&obj9_queue[n_obj9_queue];
     inst->midx=handle-1;
     inst->ix=(float)px/m9_unitscale;   // DIV2.x -> OBJ.x
@@ -3019,6 +3090,7 @@ static void draw_obj9_anim_fn(void){
     int handle=getparm();
     Obj9Inst *inst; Obj9Model *mdl; float ar; int ai,nf,fi;
     if(handle<1||handle>n_obj9_models||n_obj9_queue>=MAX_OBJ9_INST){retval(0);return;}
+    if(obj9_models[handle-1].ready!=1){retval(0);return;}   // aun cargando: no dibujar
     mdl=&obj9_models[handle-1];
     nf=mdl->nframes; if(nf<1) nf=1;
     inst=&obj9_queue[n_obj9_queue];
@@ -3037,6 +3109,21 @@ static void draw_obj9_anim_fn(void){
     inst->fblend=(float)(fpos&255)*(1.0f/255.0f);
     n_obj9_queue++;
     retval(0);
+}
+
+// ============================================================================
+// MODE9_OBJ9_READY(handle): estado de carga de un modelo de LOAD_OBJ9/_ANIM.
+//   1 = cargado y listo para DRAW_OBJ9.
+//   0 = todavia cargandose en segundo plano (sigue llamando hasta que sea 1).
+//  -1 = handle invalido o la carga fallo (fichero ausente, etc.).
+// Util para mostrar una barra de "Cargando..." o esperar a que todo este listo
+// antes de empezar la partida. No es obligatorio: DRAW_OBJ9 ya ignora por su
+// cuenta los modelos que aun no estan listos (el objeto aparece al terminar).
+// ============================================================================
+static void mode9_obj9_ready_fn(void){
+    int handle=getparm();
+    if(handle<1||handle>n_obj9_models){retval(-1);return;}
+    retval(obj9_models[handle-1].ready);
 }
 
 void __export divlibrary(LIBRARY_PARAMS){
@@ -3074,6 +3161,7 @@ void __export divlibrary(LIBRARY_PARAMS){
     COM_export("DRAW_OBJ9",       draw_obj9_fn,       5);
     COM_export("LOAD_OBJ9_ANIM",  load_obj9_anim_fn,  4);
     COM_export("DRAW_OBJ9_ANIM",  draw_obj9_anim_fn,  6);
+    COM_export("MODE9_OBJ9_READY",mode9_obj9_ready_fn,1);
 }
 
 void __export divmain(COMMON_PARAMS){
@@ -3113,8 +3201,10 @@ void __export divmain(COMMON_PARAMS){
         obj9_models[m].nv=obj9_models[m].nuv=obj9_models[m].nt=0;
         obj9_models[m].tex=NULL;obj9_models[m].tw=obj9_models[m].th=0;
         obj9_models[m].mip=NULL;obj9_models[m].mw=obj9_models[m].mh=0;
+        obj9_models[m].ready=0;
     }}
     n_obj9_models=0;n_obj9_queue=0;
+    n_obj9_jobs=0;obj9_job_head=0;   // sin cargas en segundo plano pendientes
     sky_data=NULL;sky_w=0;sky_h=0;sky_on=0;sky_cd_vw=0;sky_cd_w=0;
     fog_map=NULL;fog_on=0;
     env_r=env_g=env_b=0;
@@ -3159,7 +3249,10 @@ void __export divend(COMMON_PARAMS){
         if(obj9_models[m].tex)  {div_free(obj9_models[m].tex);  obj9_models[m].tex=NULL;}
         if(obj9_models[m].mip)  {div_free(obj9_models[m].mip);  obj9_models[m].mip=NULL;}
     }}
+    // Los jobs en vuelo no tienen memoria propia: su 'block' es el mismo puntero
+    // que obj9_models[].verts (ya liberado arriba). Solo resetear contadores.
     n_obj9_models=0;n_obj9_queue=0;
+    n_obj9_jobs=0;obj9_job_head=0;
     if(sky_data){div_free(sky_data);sky_data=NULL;sky_w=sky_h=0;sky_on=0;}
     if(grid_items){div_free(grid_items);grid_items=NULL;grid_cap=0;}
     if(wgrid_items){div_free(wgrid_items);wgrid_items=NULL;wgrid_cap=0;wgrid_n=0;}

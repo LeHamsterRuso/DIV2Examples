@@ -61,7 +61,7 @@ GLOBAL
 BEGIN
     // Es probable que los assets tarden en cargar en hardware real.
     // Si te salta la expcion 142, puedes decomentar esta linea para ignorarla.
-    //ignore_error(142); 
+    //ignore_error(142);
 
     set_mode(SCREEN_X * 1000 + SCREEN_Y);
     set_fps(GAME_FPS, 0);
@@ -78,6 +78,8 @@ BEGIN
     // OBJ. Si la textura no existe (o pones ""), el render cae a flat-shading.
     // La textura de LOAD_WLD9 es el material 0 y se aplica por defecto a todos los materiales.
     // Si cambias 100 por 200, el escenario será el doble de grande.
+    // La carga del escenario es bloqueante (hasta que no acabe la acción, no se continúa).
+    // Si cargas escenarios enormes, puede saltar al excepcion 142 ("El proceso parece bloqueado, esperando FRAME")
     LOAD_WLD9("CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
 
     // --- MULTIMATERIALES -----------------------------------------------------
@@ -146,7 +148,18 @@ BEGIN
     // se llama con FRAME entre medias para refrescar antes de que arranquen los
     // procesos (y porque parsear 10 OBJ tarda varios segundos en disco real).
     cat_h = LOAD_OBJ9_ANIM("CAT", "MAP/CAT.MAP", 50, CAT_FRAMES);
-    FRAME;  // refresca tras la carga lenta
+    /*
+    // Los modelos se cargan en segundo plano, mientras se ejecuta el juego
+    // No obstante, con MODE9_OBJ9_READY puedes consultar si el modelo ha
+    // acabado de cargarse en memoria (1 = listo, 0 = aun cargando).
+    // Puede servir, por ejemplo, para hacer pantallas de carga
+    // Esto es opcional, puedes llamar a DRAW_OBJ9 o DRAW_OBJ9_ANIM con un handle aun no cargado (0) y simplemente no dibuja nada en ese FRAME.
+    // Pero ten en cuenta que, mientras el modelo se carga, el juego se ralentiza
+    write(0, SCREEN_X/2, SCREEN_Y/2, 4, "Cargando modelo 3D...");
+    while(MODE9_OBJ9_READY(cat_h) == 0)
+        FRAME;
+    END;
+    delete_text(ALL_TEXT);*/
 
     // --- Procesos ------------------------------------------------------------
     camara();
@@ -206,7 +219,7 @@ BEGIN
     // 4 = un cuarto (si usas 320x200 -> Se aplica 40x25);
     // Acelera mucho el render a costa de una gran perdida de calidad (pixelado, texturas borrosas, mas aliasing). Ajustalo a tu gusto.
     //MODE9_DOWNSCALE(2);
-    
+
     mouse_x_prev = mouse.x;
     fall_v   = 0;
     grounded = 1;

@@ -1,0 +1,4 @@
+# CASTLE_IN material
+newmtl Inner
+map_Kd CASTIN_T.png
+Kd 0.8 0.8 0.8

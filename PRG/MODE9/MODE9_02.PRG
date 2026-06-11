@@ -75,6 +75,8 @@ BEGIN
     // OBJ. Si la textura no existe (o pones ""), el render cae a flat-shading.
     // La textura de LOAD_WLD9 es el material 0 y se aplica por defecto a todos los materiales.
     // Si cambias 100 por 200, el escenario será el doble de grande.
+    // La carga del escenario es bloqueante (hasta que no acabe la acción, no se continúa).
+    // Si cargas escenarios enormes, puede saltar al excepcion 142 ("El proceso parece bloqueado, esperando FRAME")
     LOAD_WLD9("CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
 
     // --- MULTIMATERIALES -----------------------------------------------------
