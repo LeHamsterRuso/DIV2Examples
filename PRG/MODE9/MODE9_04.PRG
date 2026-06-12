@@ -80,7 +80,7 @@ BEGIN
     // Si cambias 100 por 200, el escenario será el doble de grande.
     // La carga del escenario es bloqueante (hasta que no acabe la acción, no se continúa).
     // Si cargas escenarios enormes, puede saltar al excepcion 142 ("El proceso parece bloqueado, esperando FRAME")
-    LOAD_WLD9("CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
+    LOAD_WLD9("OBJ/CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
 
     // --- MULTIMATERIALES -----------------------------------------------------
     // CASTLE.OBJ tiene 3 materiales por 'usemtl' (en orden): 0=Castle, 1=Stairs,
@@ -142,12 +142,12 @@ BEGIN
 
     // --- NPC 3D animado (objeto OBJ texturado en el mundo) -------------------
     // LOAD_OBJ9_ANIM carga una animacion por vertex morphing: los fotogramas son
-    // CAT0.OBJ..CAT9.OBJ (misma topologia, solo cambian las posiciones) con una
+    // OBJ/CAT0.OBJ..OBJ/CAT9.OBJ (misma topologia, solo cambian las posiciones) con una
     // unica textura CAT.MAP compartida. Ocupa UN SOLO slot de los 8 de la DLL,
     // independientemente del numero de fotogramas. La carga se separa de NPC3D y
     // se llama con FRAME entre medias para refrescar antes de que arranquen los
     // procesos (y porque parsear 10 OBJ tarda varios segundos en disco real).
-    cat_h = LOAD_OBJ9_ANIM("CAT", "MAP/CAT.MAP", 50, CAT_FRAMES);
+    cat_h = LOAD_OBJ9_ANIM("OBJ/CAT", "MAP/CAT.MAP", 50, CAT_FRAMES);
     /*
     // Los modelos se cargan en segundo plano, mientras se ejecuta el juego
     // No obstante, con MODE9_OBJ9_READY puedes consultar si el modelo ha

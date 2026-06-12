@@ -72,7 +72,7 @@ BEGIN
     // Si cambias 100 por 200, el escenario será el doble de grande.
     // La carga del escenario es bloqueante (hasta que no acabe la acción, no se continúa).
     // Si cargas escenarios enormes, puede saltar al excepcion 142 ("El proceso parece bloqueado, esperando FRAME")
-    LOAD_WLD9("CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
+    LOAD_WLD9("OBJ/CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
 
     // --- MULTIMATERIALES -----------------------------------------------------
     // CASTLE.OBJ tiene 3 materiales por 'usemtl' (en orden): 0=Castle, 1=Stairs,

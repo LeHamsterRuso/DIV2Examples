@@ -62,7 +62,7 @@ BEGIN
     // OBJ. Si la textura no existe (o pones ""), el render cae a flat-shading.
     // La textura de LOAD_WLD9 es el material 0 y se aplica por defecto a todos los materiales.
     // Si cambias 100 por 200, el escenario será el doble de grande.
-    LOAD_WLD9("CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
+    LOAD_WLD9("OBJ/CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
 
     // --- MULTIMATERIALES -----------------------------------------------------
     // CASTLE.OBJ tiene 3 materiales por 'usemtl' (en orden): 0=Castle, 1=Stairs,

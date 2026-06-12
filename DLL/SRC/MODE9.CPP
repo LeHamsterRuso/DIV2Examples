@@ -2,118 +2,118 @@
 // TITLE:       MODE9.CPP
 // AUTHOR:      Sebastian J. MONCHO MAQUET
 // DATE:        06/06/2026
-// DESCRIPTION: "Modo 9" para DIV Games Studio 2 - escenario 3D navegable (OBJ)
+// DESCRIPTION: "Mode 9" for DIV Games Studio 2 - navigable 3D scenario (OBJ)
 //
-// Igual que el modo 8 (mapas .WLD por sectores) pero el ESCENARIO es una malla
-// 3D arbitraria cargada desde un fichero .OBJ (paredes, suelos y techos con
-// cualquier inclinacion). La camara es un PROCESO de DIV2 (como en el modo 8):
-// se mueve en el plano del suelo con advance()/xadvance(), gira con su angle y
-// sube/baja con z. Sobre el escenario 3D se dibujan procesos 2D al estilo del
-// modo 7 (sprites con escala segun distancia, tipo Doom / Daggerfall).
+// Like mode 8 (.WLD sector maps) but the SCENARIO is an arbitrary 3D
+// mesh loaded from an .OBJ file (walls, floors and ceilings at
+// any slope). The camera is a DIV2 PROCESS (like in mode 8):
+// it moves on the ground plane with advance()/xadvance(), turns with its angle and
+// goes up/down with z. Over the 3D scenario, 2D processes are drawn in the style of
+// mode 7 (sprites scaled by distance, Doom / Daggerfall style).
 //
-// El renderer reutiliza el rasterizador con textura perspecto-correcto de
-// KD3DT y añade: transformacion de camara en primera persona, recorte contra
-// el plano cercano (near clipping), color de ambiente, niebla por distancia
-// (colormap estilo Doom) y proyeccion de sprites (billboards).
+// The renderer reuses the perspective-correct textured rasterizer from
+// KD3DT and adds: first-person camera transform, clipping against
+// the near plane (near clipping), ambient color, distance fog
+// (Doom-style colormap) and sprite projection (billboards).
 //
-// FUNCIONES EXPORTADAS AL PRG (analogas a las del modo 8):
+// FUNCTIONS EXPORTED TO THE PRG (analogous to mode 8's):
 //
-//   LOAD_WLD9(obj,tex,scale)  -> tris cargados (0 si fallo). Carga el escenario
-//                               en UNA llamada: malla OBJ + textura .MAP + escala
-//                               (uds DIV2 por unidad OBJ). tex="" o "0" = sin
-//                               textura (flat-shaded). scale<=0 = no cambiar.
-//                               Analogo a load_wld(): cambiar de "nivel".
-//   MODE9_SETTEX(map)         -> 1/0. Cambiar la textura por separado (opcional).
-//   LOAD_SKY9(map)            -> 1/0. Cielo panoramico (.MAP que envuelve 360 en
-//                               horizontal). Sustituye el color de fondo plano;
-//                               gira con el yaw y se desplaza con el pitch. Misma
-//                               paleta que el juego. SKY9_OFF() lo desactiva.
-//   SKY9_OFF()                -> 0. Vuelve al fondo plano (SET_ENV_COLOR9).
-//   MODE9_LOADFPG(fpg)        -> nº graficos. Carga un FPG EN LA DLL para que
-//                               ella misma dibuje los billboards (c_m9) en CADA
-//                               viewport (necesario para split-screen). Sin esto
-//                               los billboards usan la ruta c_screen (1 vista).
-//   START_MODE9(camera,m9,reg)-> 1. Activa el render (firma como start_mode8).
-//                               camera=id del proceso camara; m9=&m9 (direccion
-//                               del STRUCT, ver nota); reg=region: 0=pantalla
-//                               completa, n=region definida con MODE9_REGION
-//                               (varias llamadas = split por regiones, como las
-//                               ventanas de modo 8). Integra el BIND: la DLL lee
-//                               m9.camera/height/angle de &m9 cada frame.
-//   MODE9_REGION(n,x,y,w,h)   -> 1/0. Define el rect de la region n (1..15), como
-//                               define_region() pero para el modo 9. Usala con el
-//                               3er parametro de START_MODE9. La region 0 siempre
-//                               es la pantalla completa. w/h<=0 borra la region.
-//   MODE9_FOV(grados)         -> 0. Campo de vision horizontal (def ~71). 60=zoom,
-//                               90=amplio, 110=gran angular. Afecta a todas las
-//                               vistas. No tocar si quieres el valor por defecto.
-//   STOP_MODE9()              -> 0. Desactiva el render del escenario.
-//   MODE9_SCRW() / MODE9_SCRH() -> ancho / alto de la pantalla actual (px). Para
-//                               adaptar raton y viewports a cualquier resolucion.
-//   MODE9_SET(height, pitch)  -> 0. Altura del ojo y angulo vertical (pitch) de
-//                               la camara. Equivale a m8.height y m8.angle.
-//   MODE9_UNITSCALE(n)        -> 0. Unidades DIV2 por unidad OBJ (def 100).
-//   MODE9_BIND(&m9.z)         -> 0. (opcional; START_MODE9 ya lo hace) Enlaza el
-//                               STRUCT m9 del PRG.
-//   MODE9_CULL(modo)          -> 0. 0=sin culling, 1=caras traseras (def), 2=inv.
-//   MODE9_FARCLIP(dist)       -> 0. No dibujar mas alla de 'dist' uds DIV2 (0=off).
-//                               Afecta a poligonos del mundo, OBJ y billboards.
-//                               Con niebla se recorta ademas a fog_far.
-//   SET_ENV_COLOR9(r,g,b)     -> 0. Color de fondo/ambiente, 0..100 por canal
-//                               (convencion DIV2; 100=blanco).
-//   SET_FOG9(near, far)       -> 0. Niebla por distancia (uds DIV2). El COLOR es
-//                               el de SET_ENV_COLOR9 (igual que set_fog del m8).
-//   MODE9_FOG_OFF()           -> 0. Desactiva la niebla.
-//   MODE9_OCCLUDE(on)         -> 0. 1=ocultar billboards tapados por geometria
-//                               (z-buffer, def), 0=dibujarlos siempre.
-//   MODE9_COLLISION(on)       -> 0. 1=advance/xadvance no atraviesan paredes
-//                               (usa el campo 'radius' del proceso camara), 0=off.
-//                               ON por defecto: solo hace falta llamarla con 0
-//                               si quieres DESACTIVAR las colisiones.
-//   MODE9_COLLIDE(pid)        -> 1/0. Empuja un proceso CUALQUIERA fuera de las
-//                               paredes (sliding) y reescribe su x,y. Para NPCs.
-//                               Devuelve 1 si lo movio. Usa su 'radius' (def 30).
-//                               Con MODE9_STEP>0 tambien lo apoya en el suelo.
-//   MODE9_STEP(altura)        -> 0. Escaleras y rampas: altura max (uds DIV2) que
-//                               el jugador sube solo. Los muros mas bajos que eso
-//                               no bloquean y se apoya en el suelo de debajo
-//                               (peldaños, rampas). 0=off. La GRAVEDAD la pone el
-//                               PRG (z-=...); la DLL solo SUBE z al pisar suelo.
-//   MODE9_SPLIT(slot,cam,m9,x,y,w,h) -> 1. Define un viewport (split-screen):
-//                               hasta 4 camaras, cada una con su m9 y su rect.
-//   MODE9_DOWNSCALE(n)        -> 0. Render por debajo de la resolucion nativa
-//                               (1=nativa def, 2/3/4 = +rapido, +pixelado).
-//   MODE9_PERSPECTIVE(on)     -> 0. Correccion de textura: 0=rendimiento (afin a
-//                               16px, def), 1=calidad (1/w exacto por pixel).
+//   LOAD_WLD9(obj,tex,scale)  -> tris loaded (0 on failure). Loads the scenario
+//                               in ONE call: OBJ mesh + .MAP texture + scale
+//                               (DIV2 units per OBJ unit). tex="" or "0" = no
+//                               texture (flat-shaded). scale<=0 = unchanged.
+//                               Like load_wld(): switch "level".
+//   MODE9_SETTEX(map)         -> 1/0. Change the texture separately (optional).
+//   LOAD_SKY9(map)            -> 1/0. Panoramic sky (.MAP wrapping 360 in
+//                               horizontal). Replaces the flat background color;
+//                               turns with the yaw and shifts with the pitch. Same
+//                               palette as the game. SKY9_OFF() disables it.
+//   SKY9_OFF()                -> 0. Back to the flat background (SET_ENV_COLOR9).
+//   MODE9_LOADFPG(fpg)        -> num graphics. Loads an FPG IN THE DLL so that
+//                               it draws the billboards (c_m9) itself in EACH
+//                               viewport (needed for split-screen). Without this
+//                               billboards use the c_screen path (1 view).
+//   START_MODE9(camera,m9,reg)-> 1. Enables the render (signature like start_mode8).
+//                               camera=id of the camera process; m9=&m9 (address
+//                               of the STRUCT, see note); reg=region: 0=full
+//                               screen, n=region defined with MODE9_REGION
+//                               (several calls = split by regions, like mode 8's
+//                               windows). Integrates the BIND: the DLL reads
+//                               m9.camera/height/angle from &m9 every frame.
+//   MODE9_REGION(n,x,y,w,h)   -> 1/0. Defines the rect of region n (1..15), like
+//                               define_region() but for mode 9. Use it with the
+//                               3rd parameter of START_MODE9. Region 0 is always
+//                               the full screen. w/h<=0 clears the region.
+//   MODE9_FOV(degrees)        -> 0. Horizontal field of view (def ~71). 60=zoom,
+//                               90=wide, 110=ultra-wide. Affects all
+//                               views. Leave it if you want the default value.
+//   STOP_MODE9()              -> 0. Disables the scenario render.
+//   MODE9_SCRW() / MODE9_SCRH() -> width / height of the current screen (px). To
+//                               adapt mouse and viewports to any resolution.
+//   MODE9_SET(height, pitch)  -> 0. Eye height and vertical angle (pitch) of
+//                               the camera. Equivalent to m8.height and m8.angle.
+//   MODE9_UNITSCALE(n)        -> 0. DIV2 units per OBJ unit (def 100).
+//   MODE9_BIND(&m9.z)         -> 0. (optional; START_MODE9 already does it) Binds the
+//                               PRG's m9 STRUCT.
+//   MODE9_CULL(mode)          -> 0. 0=no culling, 1=back faces (def), 2=inverted.
+//   MODE9_FARCLIP(dist)       -> 0. Don't draw beyond 'dist' DIV2 units (0=off).
+//                               Affects world, OBJ and billboard polygons.
+//                               With fog it also clips at fog_far.
+//   SET_ENV_COLOR9(r,g,b)     -> 0. Background/ambient color, 0..100 per channel
+//                               (DIV2 convention; 100=white).
+//   SET_FOG9(near, far)       -> 0. Distance fog (DIV2 units). The COLOR is
+//                               that of SET_ENV_COLOR9 (like mode 8's set_fog).
+//   MODE9_FOG_OFF()           -> 0. Disables the fog.
+//   MODE9_OCCLUDE(on)         -> 0. 1=hide billboards covered by geometry
+//                               (z-buffer, def), 0=always draw them.
+//   MODE9_COLLISION(on)       -> 0. 1=advance/xadvance don't go through walls
+//                               (uses the camera process's 'radius' field), 0=off.
+//                               ON by default: you only need to call it with 0
+//                               if you want to DISABLE collisions.
+//   MODE9_COLLIDE(pid)        -> 1/0. Pushes ANY process out of the
+//                               walls (sliding) and rewrites its x,y. For NPCs.
+//                               Returns 1 if it moved it. Uses its 'radius' (def 30).
+//                               With MODE9_STEP>0 it also rests it on the floor.
+//   MODE9_STEP(height)        -> 0. Stairs and ramps: max height (DIV2 units) the
+//                               player climbs by itself. Walls lower than that
+//                               don't block and it rests on the floor below
+//                               (steps, ramps). 0=off. GRAVITY is applied by the
+//                               PRG (z-=...); the DLL only RAISES z when stepping on floor.
+//   MODE9_SPLIT(slot,cam,m9,x,y,w,h) -> 1. Defines a viewport (split-screen):
+//                               up to 4 cameras, each with its m9 and its rect.
+//   MODE9_DOWNSCALE(n)        -> 0. Render below the native resolution
+//                               (1=native def, 2/3/4 = faster, more pixelated).
+//   MODE9_PERSPECTIVE(on)     -> 0. Texture correction: 0=performance (affine per
+//                               16px, def), 1=quality (exact 1/w per pixel).
 //
-//   MODE9_BILLBOARD(pid,wx,wy,wz,basesize) -> 1 visible / 0 oculto
-//      Coloca el proceso 'pid' como sprite 2D en la posicion de mundo (wx,wy,wz)
-//      (unidades DIV2). Ajusta su x,y (pantalla), size (escala por distancia) y
-//      z (prioridad de dibujo). Devuelve 0 y pone size=0 si queda tras la camara
-//      O si esta tapado por la geometria (oclusion por z-buffer, ver
-//      MODE9_OCCLUDE). Es la forma "modo 7" de ver procesos en el escenario 3D.
-//      GRAFICOS ANGULARES (como el modo 7): si el proceso tiene 'xgraph' = &tabla
-//      (tabla[0]=N graficos, tabla[1..N]=codigos repartidos en 360º) y 'angle' =
-//      orientacion del objeto, la DLL elige el grafico segun el angulo desde el
-//      que la camara lo ve (igual que start_mode7 + ctype=c_m7 + xgraph).
+//   MODE9_BILLBOARD(pid,wx,wy,wz,basesize) -> 1 visible / 0 hidden
+//      Places process 'pid' as a 2D sprite at world position (wx,wy,wz)
+//      (DIV2 units). Sets its x,y (screen), size (scale by distance) and
+//      z (draw priority). Returns 0 and sets size=0 if it's behind the camera
+//      OR if covered by geometry (z-buffer occlusion, see
+//      MODE9_OCCLUDE). It's the "mode 7" way to see processes in the 3D scenario.
+//      ANGULAR GRAPHICS (like mode 7): if the process has 'xgraph' = &table
+//      (table[0]=N graphics, table[1..N]=codes spread over 360deg) and 'angle' =
+//      object orientation, the DLL picks the graphic by the angle from which
+//      the camera sees it (like start_mode7 + ctype=c_m7 + xgraph).
 //
-//   MODE9_PROJECT(wx,wy,wz,&sx,&sy,&sz) -> 1 visible / 0 oculto
-//      Igual que BILLBOARD pero escribe el resultado en las variables apuntadas
-//      en vez de tocar un proceso (para posicionar sprites manualmente).
+//   MODE9_PROJECT(wx,wy,wz,&sx,&sy,&sz) -> 1 visible / 0 hidden
+//      Like BILLBOARD but writes the result into the pointed-to variables
+//      instead of touching a process (to position sprites manually).
 //
-// SISTEMA DE COORDENADAS DEL MUNDO (uds DIV2, se dividen por UNITSCALE -> OBJ):
-//   X = proceso.x  (plano del suelo, este/oeste)
-//   Z = proceso.y  (plano del suelo, norte/sur)
-//   Y (altura)= proceso.z + m9.height   (eje vertical, Y-up como en Blender/OBJ)
-//   yaw  = proceso.angle (milesimas de grado: pi = 180000)
-//   pitch= m9.angle      (milesimas de grado; 0 = horizonte)
+// WORLD COORDINATE SYSTEM (DIV2 units, divided by UNITSCALE -> OBJ):
+//   X = process.x  (ground plane, east/west)
+//   Z = process.y  (ground plane, north/south)
+//   Y (height)= process.z + m9.height   (vertical axis, Y-up as in Blender/OBJ)
+//   yaw  = process.angle (thousandths of a degree: pi = 180000)
+//   pitch= m9.angle      (thousandths of a degree; 0 = horizon)
 //
-// NOTA SOBRE m9 / c_m9:
-//   Una DLL no puede crear STRUCTs ni c_types nuevos del lenguaje DIV2 (los
-//   genera el compilador). El struct m9 (z,camera,height,angle) y la constante
-//   c_m9 se declaran en el PRG (ver MODE9.PRG) y se comunican a esta DLL con
-//   START_MODE9 + MODE9_SET. Los procesos-sprite usan ctype=c_screen y se
-//   posicionan con MODE9_BILLBOARD; no necesitan un c_type real del motor.
+// NOTE ABOUT m9 / c_m9:
+//   A DLL cannot create new STRUCTs or c_types of the DIV2 language (the
+//   compiler generates them). The m9 struct (z,camera,height,angle) and the
+//   c_m9 constant are declared in the PRG (see MODE9.PRG) and passed to this DLL with
+//   START_MODE9 + MODE9_SET. The sprite-processes use ctype=c_screen and are
+//   positioned with MODE9_BILLBOARD; they don't need a real engine c_type.
 //------------------------------------------------------------------------------
 
 #define GLOBALS
@@ -121,48 +121,48 @@
 #include <math.h>
 #include <string.h>
 
-// ---- Limites de la malla (escenarios mas grandes que un modelo suelto) ------
+// ---- Mesh limits (scenarios larger than a single model) ------
 #define MAX_VERTS   4096
 #define MAX_UVS     4096
 #define MAX_TRIS    8192
-#define MAX_WALLS   4096      // segmentos 2D (XZ) para colision con paredes
-#define MAX_FLOORS  4096      // triangulos "suelo" (no verticales) para escalones/rampas
-#define MAX_VIEWS   4         // viewports simultaneos (split-screen)
+#define MAX_WALLS   4096      // 2D (XZ) segments for wall collision
+#define MAX_FLOORS  4096      // "floor" triangles (non-vertical) for steps/ramps
+#define MAX_VIEWS   4         // simultaneous viewports (split-screen)
 
-// ---- Colision -----------------------------------------------------------
-#define WALL_NY     0.5f      // |normal.y|<WALL_NY -> triangulo "pared" (vertical)
-#define PLAYER_BODY 1.8f      // alto del cuerpo del jugador (uds OBJ) hacia abajo
-#define COLLIDE_DEF 30        // radio de colision por defecto (uds DIV2) si radius<=0
+// ---- Collision -----------------------------------------------------------
+#define WALL_NY     0.5f      // |normal.y|<WALL_NY -> "wall" triangle (vertical)
+#define PLAYER_BODY 1.8f      // player body height (OBJ units) downward
+#define COLLIDE_DEF 30        // default collision radius (DIV2 units) if radius<=0
 
-// ---- Paleta de shading flat (tris sin UV) -----------------------------------
-#define PAL_BASE    224       // 224..239: rampa de sombreado flat
+// ---- Flat shading palette (tris without UV) -----------------------------------
+#define PAL_BASE    224       // 224..239: flat shading ramp
 #define PAL_SHADES   16
-#define PAL_ENV     223       // 1 entrada reservada para el color de fondo
+#define PAL_ENV     223       // 1 entry reserved for the background color
 #define AMBIENT     0.25f
 
-// ---- Niebla -----------------------------------------------------------------
-#define FOG_LEVELS  16        // niveles del colormap de niebla
+// ---- Fog -----------------------------------------------------------------
+#define FOG_LEVELS  16        // fog colormap levels
 
-// ---- Proyeccion -------------------------------------------------------------
-#define NEAR_PLANE  0.06f     // plano cercano (uds OBJ)
-#define FOCAL_K     0.70f     // focal = ancho * FOCAL_K  (~71 grados de FOV)
-#define TEX_SEG     16        // px entre divisiones de perspectiva (correccion afin)
+// ---- Projection -------------------------------------------------------------
+#define NEAR_PLANE  0.06f     // near plane (OBJ units)
+#define FOCAL_K     0.70f     // focal = width * FOCAL_K  (~71 degrees of FOV)
+#define TEX_SEG     16        // px between perspective divisions (affine correction)
 
-// ---- Toggles de las optimizaciones (para aislar fallos) ----------------------
-// 0 = desactivado (comportamiento clasico/seguro). Si algo casca, poner a 0.
-#define M9_FAST_FTOL 1        // Tier 1: float->int por "magic number" (version volatile)
-#define M9_USE_MIP   1        // Tier 2: mipmap de textura
-#define M9_USE_GRID  1        // Tier 3: rejilla espacial de culling
-#define M9_CORNER_SLIDE 1     // Colision: no "tapar" los extremos de pared en los
-                              // vertices interiores (juntas/esquinas) -> no atorarse.
-                              // 0 = comportamiento clasico (tapa radial en todo extremo).
-#define M9_COLLIDE_GRID 1     // Colision: rejilla espacial de paredes (solo prueba
-                              // las cercanas al jugador). 0 = recorrer todas (clasico).
+// ---- Optimization toggles (to isolate bugs) ----------------------
+// 0 = disabled (classic/safe behavior). If something breaks, set to 0.
+#define M9_FAST_FTOL 1        // Tier 1: float->int via "magic number" (volatile version)
+#define M9_USE_MIP   1        // Tier 2: texture mipmap
+#define M9_USE_GRID  1        // Tier 3: spatial culling grid
+#define M9_CORNER_SLIDE 1     // Collision: don't "cap" the wall ends at the
+                              // interior vertices (joints/corners) -> don't get stuck.
+                              // 0 = classic behavior (radial cap at every end).
+#define M9_COLLIDE_GRID 1     // Collision: spatial wall grid (only tests the
+                              // ones near the player). 0 = scan all (classic).
 
-// ---- Offsets de campos dentro de un proceso (en ints, base = id) ------------
-// (derivados de _reserved[20] + campos de _process en div.h)
+// ---- Field offsets within a process (in ints, base = id) ------------
+// (derived from _reserved[20] + _process fields in div.h)
 #define P_ID      0
-#define P_STATUS  4       // 0=muerto, 2=vivo (ver LTOBJ.DEF reserved.status)
+#define P_STATUS  4       // 0=dead, 2=alive (see LTOBJ.DEF reserved.status)
 #define P_CTYPE   25
 #define P_X       26
 #define P_Y       27
@@ -170,309 +170,309 @@
 #define P_GRAPH   29
 #define P_SIZE    31
 #define P_ANGLE   32
-#define P_XGRAPH  35      // puntero a tabla de graficos angulares (como modo 7)
+#define P_XGRAPH  35      // pointer to angular graphics table (like mode 7)
 #define P_HEIGHT  36
-#define P_RADIUS  39      // radio de colision del proceso (uds DIV2)
+#define P_RADIUS  39      // process collision radius (DIV2 units)
 
-// ctype "logico" del modo 9: un proceso con ctype=c_m9 se dibuja como billboard
-// automaticamente (como c_m7 en el modo 7). Valor por defecto 200 (no colisiona
-// con c_screen=0/c_scroll=1/c_m7=2); ajustable con MODE9_CTYPE. La constante
-// c_m9 del PRG debe valer lo mismo.
-#define C_SCREEN  0       // ctype de pantalla de DIV2 (LTOBJ.DEF)
-#define MAX_SPR   256     // maximo de billboards c_m9 simultaneos
+// mode 9 "logical" ctype: a process with ctype=c_m9 is drawn as a billboard
+// automatically (like c_m7 in mode 7). Default value 200 (doesn't collide
+// with c_screen=0/c_scroll=1/c_m7=2); adjustable with MODE9_CTYPE. The PRG's
+// c_m9 constant must hold the same value.
+#define C_SCREEN  0       // DIV2 screen ctype (LTOBJ.DEF)
+#define MAX_SPR   256     // max simultaneous c_m9 billboards
 
-// ---- Tipos ------------------------------------------------------------------
+// ---- Types ------------------------------------------------------------------
 typedef struct { float x, y, z;               } V3;
 typedef struct { float u, v;                  } UV2;
 typedef struct { int a,b,c; int ua,ub,uc; unsigned char flat; unsigned char mat; } TriTex;
 typedef struct { float depth; int idx; int ci;} TSort;
-// Vertice durante el recorte: posicion en espacio camara + UV
+// Vertex during clipping: position in camera space + UV
 typedef struct { float cx,cy,cz,u,v;          } CVert;
 
-// ---- Datos de la malla ------------------------------------------------------
+// ---- Mesh data ------------------------------------------------------
 static V3     mesh_v[MAX_VERTS];
 static UV2    mesh_uv[MAX_UVS];
 static TriTex mesh_t[MAX_TRIS];
 static int n_verts=0, n_uvs=0, n_tris=0;
 static int mesh_ok=0, has_uvs=0;
 
-// ---- Paredes para colision (footprint 2D en XZ + extension vertical) ---------
-// vi0/vi1 = indices de vertice (mesh_v) de los extremos del segmento.
-// cap0/cap1 = 1 si ese extremo genera "tapa" radial en la colision (extremo
-// libre / esquina real), 0 si es un vertice INTERIOR compartido por otra pared
-// (junta o esquina): omitir su tapa evita que el jugador se atore (M9_CORNER_SLIDE).
+// ---- Walls for collision (2D footprint in XZ + vertical extent) ---------
+// vi0/vi1 = vertex indices (mesh_v) of the segment ends.
+// cap0/cap1 = 1 if that end generates a radial "cap" in the collision (free
+// end / real corner), 0 if it's an INTERIOR vertex shared by another wall
+// (joint or corner): omitting its cap avoids the player getting stuck (M9_CORNER_SLIDE).
 typedef struct { float x0,z0,x1,z1, ymin,ymax; int vi0,vi1; unsigned char cap0,cap1; } M9Wall;
 static M9Wall mesh_walls[MAX_WALLS];
 static int    n_walls=0;
-static int    wall_vc[MAX_VERTS];    // nº de paredes que tocan cada grupo XZ (para cap0/cap1)
-static int    vgroup[MAX_VERTS];     // vertice -> representante de su grupo de coincidencia XZ
+static int    wall_vc[MAX_VERTS];    // num walls touching each XZ group (for cap0/cap1)
+static int    vgroup[MAX_VERTS];     // vertex -> representative of its XZ coincidence group
 
-// ---- Suelos para escalones y rampas (floor-following) -----------------------
-// Indices de los triangulos casi-horizontales (suelo/techo). floor_height() busca
-// el suelo MAS ALTO bajo el jugador (<= pies + m9_step) y le sube los pies encima:
-// asi sube rampas inclinadas y peldaños, sin hundirse en suelos a distinto nivel.
+// ---- Floors for steps and ramps (floor-following) -----------------------
+// Indices of the near-horizontal triangles (floor/ceiling). floor_height() finds
+// the HIGHEST floor under the player (<= feet + m9_step) and raises the feet onto it:
+// this climbs sloped ramps and steps without sinking into floors at a different level.
 static int    mesh_floor_idx[MAX_FLOORS];
 static int    n_floors=0;
-// Altura maxima de escalon/rampa autoescalable (uds OBJ). 0 = desactivado
-// (comportamiento clasico: la DLL no toca z, el PRG controla la altura).
+// Max auto-climbable step/ramp height (OBJ units). 0 = disabled
+// (classic behavior: the DLL doesn't touch z, the PRG controls the height).
 static float  m9_step=0.0f;
 
-// ---- Modelos 3D de objeto (LOAD_OBJ9 / DRAW_OBJ9) --------------------------
-// Permiten colocar meshes 3D texturados en el mundo como NPCs/props. Cada
-// modelo es un OBJ cargado con su propia escala y textura. Las instancias se
-// encolan con DRAW_OBJ9 (llamar cada frame) y se renderizan en render_view
-// con el mismo z-buffer que la malla del mundo (oclusion correcta).
-#define MAX_OBJ9_MODELS  8    // modelos distintos
-#define MAX_OBJ9_INST   32    // instancias por frame
-#define MAX_OBJ9V      512    // vertices por modelo
+// ---- 3D object models (LOAD_OBJ9 / DRAW_OBJ9) --------------------------
+// Let you place textured 3D meshes in the world as NPCs/props. Each
+// model is an OBJ loaded with its own scale and texture. Instances are
+// queued with DRAW_OBJ9 (call every frame) and rendered in render_view
+// with the same z-buffer as the world mesh (correct occlusion).
+#define MAX_OBJ9_MODELS  8    // distinct models
+#define MAX_OBJ9_INST   32    // instances per frame
+#define MAX_OBJ9V      512    // vertices per model
 #define MAX_OBJ9UV    1024
-#define MAX_OBJ9T     1024    // triangulos por modelo
+#define MAX_OBJ9T     1024    // triangles per model
 typedef struct {
-    V3    *verts;             // div_malloc; = vframes (frame 0). Owner de la memoria.
-    V3    *vframes;           // nv*nframes verts contiguos; frame f en vframes+f*nv
-    int    nframes;           // fotogramas de animacion (1 = modelo estatico)
+    V3    *verts;             // div_malloc; = vframes (frame 0). Owner of the memory.
+    V3    *vframes;           // nv*nframes contiguous verts; frame f at vframes+f*nv
+    int    nframes;           // animation frames (1 = static model)
     UV2   *uvs;
     TriTex *tris;
     int    nv, nuv, nt;
-    char  *tex; int tw, th;  // textura MAP (NULL = flat)
+    char  *tex; int tw, th;  // MAP texture (NULL = flat)
     char  *mip; int mw, mh;  // mipmap 1/2 (LOD/cache)
-    int    ready;            // 0=cargando (en segundo plano), 1=listo, -1=fallo
+    int    ready;            // 0=loading (in background), 1=ready, -1=failed
 } Obj9Model;
 typedef struct {
-    int   midx;              // indice en obj9_models[]
-    float ix, iy, iz;        // posicion en espacio mundo (uds OBJ)
-    float ysin, ycos;        // rotacion Y precomputada del angulo DIV2
-    int   fa, fb;            // fotogramas a interpolar (fa->fb)
-    float fblend;            // mezcla 0..1 entre fa y fb (0 = solo fa)
+    int   midx;              // index into obj9_models[]
+    float ix, iy, iz;        // position in world space (OBJ units)
+    float ysin, ycos;        // precomputed Y rotation from the DIV2 angle
+    int   fa, fb;            // frames to interpolate (fa->fb)
+    float fblend;            // blend 0..1 between fa and fb (0 = only fa)
 } Obj9Inst;
 static Obj9Model obj9_models[MAX_OBJ9_MODELS];
 static int       n_obj9_models = 0;
 static Obj9Inst  obj9_queue[MAX_OBJ9_INST];
 static int       n_obj9_queue  = 0;
 
-// ---- Carga de modelos EN SEGUNDO PLANO (no bloqueante) ----------------------
-// LOAD_OBJ9/LOAD_OBJ9_ANIM reservan el slot, devuelven el handle al instante y
-// encolan un "job". obj9_pump() (en background_to_buffer, 1 fichero por frame)
-// va parseando: asi la carga no congela el juego ni dispara el watchdog (err 142)
-// con animaciones de muchos frames. El modelo no se dibuja hasta ready==1; las
-// instancias DRAW_OBJ9 de un modelo aun no listo se ignoran (aparece al cargar).
-// No es multihilo (DOS es monohilo): es streaming troceado entre frames.
+// ---- Model loading IN THE BACKGROUND (non-blocking) ----------------------
+// LOAD_OBJ9/LOAD_OBJ9_ANIM reserve the slot, return the handle instantly and
+// queue a "job". obj9_pump() (in background_to_buffer, 1 file per frame)
+// parses it: so loading doesn't freeze the game nor trigger the watchdog (err 142)
+// with many-frame animations. The model isn't drawn until ready==1; the
+// DRAW_OBJ9 instances of a not-yet-ready model are ignored (it appears once loaded).
+// It's not multithreaded (DOS is single-threaded): it's chunked streaming across frames.
 #define OBJ9_KIND_STATIC 0
 #define OBJ9_KIND_ANIM   1
 typedef struct {
-    int   midx;              // slot del modelo destino
+    int   midx;              // target model slot
     int   kind;              // OBJ9_KIND_STATIC / OBJ9_KIND_ANIM
-    char  oname[64];         // OBJ (static) o base de la anim ("CAT" -> CATn.OBJ)
-    char  tname[64];         // textura MAP ("" = flat)
-    float sfac;              // escala (uds DIV2 por unidad OBJ)
-    int   nframes;           // fotogramas (anim)
-    int   step;              // estado: 0=topologia/frame0, 1..nf-1=frame, nf=textura
-    V3   *block;             // bloque de fotogramas en construccion (anim)
-    int   nv;                // nº de vertices del frame 0 (anim)
+    char  oname[64];         // OBJ (static) or anim base ("CAT" -> CATn.OBJ)
+    char  tname[64];         // MAP texture ("" = flat)
+    float sfac;              // scale (DIV2 units per OBJ unit)
+    int   nframes;           // frames (anim)
+    int   step;              // state: 0=topology/frame0, 1..nf-1=frame, nf=texture
+    V3   *block;             // frame block under construction (anim)
+    int   nv;                // num vertices of frame 0 (anim)
 } Obj9Job;
-static Obj9Job   obj9_jobs[MAX_OBJ9_MODELS];   // FIFO; como mucho 1 job por modelo
-static int       n_obj9_jobs   = 0;            // jobs encolados
-static int       obj9_job_head = 0;            // job en proceso (avanza al terminar)
-// Scratch de transformacion para el modelo en curso (reutilizado por instancia)
-static float     obj9cv[MAX_OBJ9V][3];  // espacio camara
-static float     obj9px[MAX_OBJ9V];     // pantalla subpixel X
-static float     obj9py[MAX_OBJ9V];     // pantalla subpixel Y
-static char      obj9bh[MAX_OBJ9V];     // 1 = detras del near plane
+static Obj9Job   obj9_jobs[MAX_OBJ9_MODELS];   // FIFO; at most 1 job per model
+static int       n_obj9_jobs   = 0;            // queued jobs
+static int       obj9_job_head = 0;            // job in progress (advances when finished)
+// Transform scratch for the current model (reused per instance)
+static float     obj9cv[MAX_OBJ9V][3];  // camera space
+static float     obj9px[MAX_OBJ9V];     // screen subpixel X
+static float     obj9py[MAX_OBJ9V];     // screen subpixel Y
+static char      obj9bh[MAX_OBJ9V];     // 1 = behind the near plane
 
-// ---- Buffers de render ------------------------------------------------------
-static float camv[MAX_VERTS][3];   // vertices en espacio camara
-static int   psx[MAX_VERTS], psy[MAX_VERTS];  // proyeccion en pantalla ENTERA (culling)
-static float psxf[MAX_VERTS], psyf[MAX_VERTS]; // proyeccion en pantalla SUBPIXEL (rasterizado)
-static char  pbehind[MAX_VERTS];   // 1 si el vertice esta tras el plano cercano
+// ---- Render buffers ------------------------------------------------------
+static float camv[MAX_VERTS][3];   // vertices in camera space
+static int   psx[MAX_VERTS], psy[MAX_VERTS];  // projection in INTEGER screen (culling)
+static float psxf[MAX_VERTS], psyf[MAX_VERTS]; // projection in SUBPIXEL screen (rasterizing)
+static char  pbehind[MAX_VERTS];   // 1 if the vertex is behind the near plane
 static TSort tsort[MAX_TRIS];
-// Bucket sort por profundidad (orden front-to-back en O(n))
+// Bucket sort by depth (front-to-back order in O(n))
 #define NBUCKETS 256
-static int   order[MAX_TRIS];      // indices en tsort[] ordenados cerca->lejos
-static int   bcnt[NBUCKETS+1];     // conteos/prefijos del bucket sort
+static int   order[MAX_TRIS];      // indices into tsort[] sorted near->far
+static int   bcnt[NBUCKETS+1];     // counts/prefixes of the bucket sort
 
-// ---- Materiales (multi-textura) ---------------------------------------------
-// Hasta MAX_MATS materiales distintos (por orden de aparicion de 'usemtl' en el
-// OBJ). mat_data[0] es el material por defecto (el que se carga con LOAD_WLD9 o
-// MODE9_SETTEX). Cada triangulo guarda su indice de material (TriTex.mat) y el
-// rasterizador selecciona la textura correcta; si mat_data[mat]==NULL usa mat 0.
-// MODE9_MATERIAL(idx,"MAP/x.MAP") asigna una textura a cualquier slot.
+// ---- Materials (multi-texture) ---------------------------------------------
+// Up to MAX_MATS distinct materials (by order of 'usemtl' appearance in the
+// OBJ). mat_data[0] is the default material (the one loaded with LOAD_WLD9 or
+// MODE9_SETTEX). Each triangle stores its material index (TriTex.mat) and the
+// rasterizer selects the correct texture; if mat_data[mat]==NULL it uses mat 0.
+// MODE9_MATERIAL(idx,"MAP/x.MAP") assigns a texture to any slot.
 #define MAX_MATS 16
-static char *mat_data[MAX_MATS];   // pixeles de la textura (NULL = sin asignar)
+static char *mat_data[MAX_MATS];   // texture pixels (NULL = unassigned)
 static int   mat_w[MAX_MATS];
 static int   mat_h[MAX_MATS];
-static char *mat_mip[MAX_MATS];   // mipmap de nivel 1 (NULL si no hay)
+static char *mat_mip[MAX_MATS];   // level-1 mipmap (NULL if none)
 static int   matm_w[MAX_MATS];
 static int   matm_h[MAX_MATS];
-static int   n_mats = 1;           // nº de materiales distintos en el OBJ actual
+static int   n_mats = 1;           // num distinct materials in the current OBJ
 
-// ---- Skybox / cielo panoramico (cilindrico 360º) ----------------------------
-// En vez de rellenar el fondo con un color plano, se mapea una textura panoramica:
-// la columna de textura sale del yaw de la camara (envuelve 360º) y la fila del
-// pitch (mirar arriba/abajo). Es el equivalente eficiente del "sky" de Doom/Build
-// (un cubemap de 6 caras seria mucho mas caro por pixel en 486).
+// ---- Skybox / panoramic sky (cylindrical 360deg) ----------------------------
+// Instead of filling the background with a flat color, a panoramic texture is mapped:
+// the texture column comes from the camera yaw (wraps 360deg) and the row from the
+// pitch (look up/down). It's the efficient equivalent of Doom/Build's "sky"
+// (a 6-face cubemap would be much more expensive per pixel on a 486).
 #define SKY_MAXDIM 2048
 static char *sky_data = NULL;
 static int   sky_w = 0, sky_h = 0, sky_on = 0;
-static int   sky_coldelta[SKY_MAXDIM];   // columna pantalla -> delta de columna de textura
-static int   sky_cd_vw = 0, sky_cd_vh = 0, sky_cd_w = 0; // cache: vw/vh/sky_w para los que estan calculadas las tablas
+static int   sky_coldelta[SKY_MAXDIM];   // screen column -> texture column delta
+static int   sky_cd_vw = 0, sky_cd_vh = 0, sky_cd_w = 0; // cache: vw/vh/sky_w for which the tables are computed
 
-// ---- Sprites de billboards dibujados por la DLL (multi-vista) ----------------
-// La DLL no puede leer los graficos FPG que carga DIV2, asi que parsea el FPG
-// ella misma (formato en div.h) y guarda los graficos por codigo. Esto permite
-// dibujar los billboards en CADA viewport (split-screen) con oclusion por pixel.
+// ---- Billboard sprites drawn by the DLL (multi-view) ----------------
+// The DLL can't read the FPG graphics that DIV2 loads, so it parses the FPG
+// itself (format in div.h) and stores the graphics by code. This lets it
+// draw the billboards in EACH viewport (split-screen) with per-pixel occlusion.
 #define MAX_FPGSPR 128
 typedef struct { int code,w,h,cx,cy; char *pix; } FpgSpr;
 static FpgSpr fspr[MAX_FPGSPR];
 static int    n_fpgspr = 0;
 
 // ---- Z-buffer (occlusion) ---------------------------------------------------
-// 16 BITS (unsigned short): guarda 1/w en punto fijo (1/w * ZSCALE). Mayor =
-// mas cerca. Mitad de memoria y de ancho de banda que un z-buffer de 32 bits
-// (mejor uso de cache en DOSBox). Comparacion por pixel en enteros.
-// ZSCALE se elige para que 1/NEAR_PLANE * ZSCALE quepa en 16 bits (<=65535):
-//   1/0.06 = 16.67  ->  ZSCALE <= 65535*0.06 = 3932  ->  usamos 3900.
+// 16 BITS (unsigned short): stores 1/w in fixed point (1/w * ZSCALE). Larger =
+// closer. Half the memory and bandwidth of a 32-bit z-buffer
+// (better cache use in DOSBox). Per-pixel comparison in integers.
+// ZSCALE is chosen so that 1/NEAR_PLANE * ZSCALE fits in 16 bits (<=65535):
+//   1/0.06 = 16.67  ->  ZSCALE <= 65535*0.06 = 3932  ->  we use 3900.
 #define ZSCALE 3900.0f
 static unsigned short *zbuf = NULL;
 static int  zbuf_w = 0, zbuf_h = 0;
 
-// ---- Rejilla espacial XZ (culling de triangulos por celdas) -----------------
-// El escenario se reparte en una rejilla GRID_DIM x GRID_DIM sobre el plano XZ.
-// Cada celda guarda los indices de los triangulos cuyo footprint la solapan. Al
-// renderizar solo se consideran los triangulos de las celdas dentro del frustum
-// horizontal + far clip, en vez de recorrer los n_tris enteros cada frame.
+// ---- XZ spatial grid (per-cell triangle culling) -----------------
+// The scenario is split into a GRID_DIM x GRID_DIM grid over the XZ plane.
+// Each cell stores the indices of the triangles whose footprint overlaps it. When
+// rendering, only the triangles of the cells inside the horizontal frustum
+// + far clip are considered, instead of scanning all n_tris every frame.
 #define GRID_DIM   16
 #define GRID_CELLS (GRID_DIM*GRID_DIM)
-static int   grid_start[GRID_CELLS+1];   // prefijos: triangulos de la celda c en [start[c],start[c+1])
-static int  *grid_items=NULL;            // (div_malloc) indices de triangulo agrupados por celda
-static int   grid_cap=0;                  // capacidad actual de grid_items (en ints)
-static int   grid_n=0;                    // 0 = sin rejilla (fallback: recorrer todo)
-static float grid_minx=0,grid_minz=0;     // origen de la rejilla (uds OBJ)
-static float grid_cw=1,grid_ch=1;         // tamaño de celda (uds OBJ)
+static int   grid_start[GRID_CELLS+1];   // prefixes: triangles of cell c in [start[c],start[c+1])
+static int  *grid_items=NULL;            // (div_malloc) triangle indices grouped by cell
+static int   grid_cap=0;                  // current capacity of grid_items (in ints)
+static int   grid_n=0;                    // 0 = no grid (fallback: scan everything)
+static float grid_minx=0,grid_minz=0;     // grid origin (OBJ units)
+static float grid_cw=1,grid_ch=1;         // cell size (OBJ units)
 static float grid_invcw=1,grid_invch=1;
-static float grid_cellrad=1;              // radio (media diagonal) de una celda
-static int  *tstamp=NULL;                 // (div_malloc) marca de frame por triangulo
+static float grid_cellrad=1;              // radius (half diagonal) of a cell
+static int  *tstamp=NULL;                 // (div_malloc) frame stamp per triangle
 static int   tstamp_cap=0;
 static int   frame_stamp=0;
 
-// ---- Rejilla espacial de PAREDES (culling de colision) ----------------------
-// Reutiliza la geometria de celdas de la rejilla de render (grid_minx/cw/inv...).
-// Cada celda lista las paredes cuyo footprint la solapan; la colision solo prueba
-// las paredes de las celdas cercanas al jugador, no las n_walls enteras.
-static int   wgrid_start[GRID_CELLS+1];   // prefijos por celda
-static int  *wgrid_items=NULL;            // (div_malloc) indices de pared por celda
+// ---- WALL spatial grid (collision culling) ----------------------
+// Reuses the cell geometry of the render grid (grid_minx/cw/inv...).
+// Each cell lists the walls whose footprint overlaps it; collision only tests
+// the walls of the cells near the player, not all n_walls.
+static int   wgrid_start[GRID_CELLS+1];   // prefixes per cell
+static int  *wgrid_items=NULL;            // (div_malloc) wall indices per cell
 static int   wgrid_cap=0;
-static int   wgrid_n=0;                    // 0 = sin rejilla de paredes (recorre todo)
-static int   wcand[MAX_WALLS];            // candidatos de la consulta de colision actual
+static int   wgrid_n=0;                    // 0 = no wall grid (scan all)
+static int   wcand[MAX_WALLS];            // candidates of the current collision query
 static int   n_wcand=0;
-static int   wstamp[MAX_WALLS];           // dedup: pared ya añadida en esta consulta
+static int   wstamp[MAX_WALLS];           // dedup: wall already added in this query
 static int   wstamp_frame=0;
 
-// ---- Transformacion de vertices PEREZOSA (lazy) -----------------------------
-// Solo se transforma/proyecta un vertice la primera vez que un triangulo VISIBLE
-// lo necesita (marcado con vstamp == frame_stamp). Asi, si la rejilla descarta
-// celdas enteras, sus vertices ni se tocan. Los parametros de camara de la vista
-// actual se guardan en g_* para que xform_vertex() (llamada desde consider_tri)
-// los use sin pasarlos por argumento.
-static int   vstamp[MAX_VERTS];           // marca de frame por vertice (transformado ya?)
+// ---- LAZY vertex transform -----------------------------
+// A vertex is only transformed/projected the first time a VISIBLE triangle
+// needs it (marked with vstamp == frame_stamp). So if the grid discards
+// whole cells, their vertices are never touched. The camera params of the current
+// view are stored in g_* so that xform_vertex() (called from consider_tri)
+// uses them without passing them as arguments.
+static int   vstamp[MAX_VERTS];           // frame stamp per vertex (already transformed?)
 static float g_Cx,g_Cy,g_Cz,g_ysin,g_ycos,g_psin,g_pcos,g_focal,g_hw,g_hh;
 
-// ---- Tabla trigonometrica (estilo SNES Doom) ---------------------------------
-// 4096 entradas de sin/cos evitan las llamadas a sinf/cosf en el bucle de
-// renderizado (~40 ciclos en 486 cada una -> 4-8 ciclos con tabla).
+// ---- Trig table (SNES Doom style) ---------------------------------
+// 4096 sin/cos entries avoid the sinf/cosf calls in the rendering
+// loop (~40 cycles each on a 486 -> 4-8 cycles with a table).
 #define TRIG_SIZE 4096
 #define TRIG_MASK (TRIG_SIZE-1)
-#define TRIG_K    651.8986f   // 4096/(2*pi): rad -> indice
+#define TRIG_K    651.8986f   // 4096/(2*pi): rad -> index
 static float sin_tab[TRIG_SIZE];
 static float cos_tab[TRIG_SIZE];
 
 // ---- Downscale / line doubler -----------------------------------------------
-// 1 = resolucion nativa (def); 2 = mitad de lineas (doblar -> ~2x fill rate);
-// 3 = un tercio; 4 = un cuarto. Mismo truco que el SNES Doom: calcular 1 de cada
-// N scanlines y duplicarlas. Usar MODE9_DOWNSCALE(n) desde el PRG.
+// 1 = native resolution (def); 2 = half the lines (double -> ~2x fill rate);
+// 3 = one third; 4 = one quarter. Same trick as SNES Doom: compute 1 of every
+// N scanlines and duplicate them. Use MODE9_DOWNSCALE(n) from the PRG.
 static int m9_downscale = 1;
 
-// ---- Correccion de perspectiva de la textura --------------------------------
-// Longitud (px) del tramo afin entre dos divisiones 1/w exactas en hspan_z.
-// = TEX_SEG (16): RENDIMIENTO (la textura se interpola lineal dentro del tramo;
-//   rapido, pero "ondula" un poco en superficies a angulos pronunciados).
-// = 1: CALIDAD (un 1/w exacto por pixel -> perspectiva perfecta, mas lento).
-// Por defecto rendimiento. Se cambia con MODE9_PERSPECTIVE(on).
+// ---- Texture perspective correction --------------------------------
+// Length (px) of the affine span between two exact 1/w divisions in hspan_z.
+// = TEX_SEG (16): PERFORMANCE (the texture is interpolated linearly within the span;
+//   fast, but "wobbles" a bit on surfaces at steep angles).
+// = 1: QUALITY (an exact 1/w per pixel -> perfect perspective, slower).
+// Performance by default. Changed with MODE9_PERSPECTIVE(on).
 static int m9_texseg = TEX_SEG;
-// Segmento EFECTIVO del triangulo actual. raster_tri_z lo baja a 1 (por pixel)
-// automaticamente cuando el triangulo tiene perspectiva fuerte (gran ratio de
-// profundidad entre sus vertices: geometria que cruza el plano cercano "entrando
-// por la camara", o suelos/techos muy inclinados), que es donde la correccion
-// afin a 16px deforma la textura. El resto sigue usando m9_texseg (rapido).
+// EFFECTIVE segment of the current triangle. raster_tri_z drops it to 1 (per pixel)
+// automatically when the triangle has strong perspective (large depth ratio
+// between its vertices: geometry crossing the near plane "entering through the
+// camera", or very steep floors/ceilings), which is where the 16px affine
+// correction warps the texture. The rest still uses m9_texseg (fast).
 static int cur_seg = TEX_SEG;
 
-// ---- Rectangulo de recorte del viewport actual (para split-screen) ----------
-// El z-buffer y el buffer de video usan el ancho COMPLETO como stride; el
-// dibujo se limita a [clip_x0,clip_x1) x [clip_y0,clip_y1).
+// ---- Clip rectangle of the current viewport (for split-screen) ----------
+// The z-buffer and the video buffer use the FULL width as stride; the
+// drawing is limited to [clip_x0,clip_x1) x [clip_y0,clip_y1).
 static int clip_x0=0, clip_x1=0, clip_y0=0, clip_y1=0;
 
-// ---- Estado de camara / modo ------------------------------------------------
+// ---- Camera / mode state ------------------------------------------------
 static int   m9_active   = 0;
-static int   cull_mode   = 1;      // 0=sin cull, 1=cull caras traseras, 2=cull frontales
-static int   m9_camera   = 0;      // id del proceso camara
-static int   m9_height   = 0;      // altura del ojo (uds DIV2)
-static int   m9_pitch    = 0;      // angulo vertical (milesimas de grado)
-static float m9_unitscale= 100.0f; // uds DIV2 por unidad OBJ
-static int   m9_bind     = 0;      // offset en mem[] del STRUCT m9 (0=no enlazado)
-static int   m9_region   = 0;      // ultima region pasada a START_MODE9 (0=full)
-static int   m9_occlude  = 1;      // 1=ocultar billboards tras la geometria (z-buffer)
-static int   m9_ctype    = 200;    // valor de c_m9 (ctype de billboard automatico)
-static int   m9_collision= 1;      // 1=advance/xadvance no atraviesan paredes (ON por defecto)
-static float far_clip    = 0.0f;   // distancia max de dibujo en uds OBJ (0=sin limite)
-// Constante focal: focal = ancho_viewport * m9_focal_k. Relacion con el FOV
-// horizontal: m9_focal_k = 0.5/tan(FOV/2). Por defecto FOCAL_K (~71 grados).
-// Se cambia con MODE9_FOV(grados); afecta a la proyeccion Y al culling de frustum.
+static int   cull_mode   = 1;      // 0=no cull, 1=cull back faces, 2=cull front faces
+static int   m9_camera   = 0;      // id of the camera process
+static int   m9_height   = 0;      // eye height (DIV2 units)
+static int   m9_pitch    = 0;      // vertical angle (thousandths of a degree)
+static float m9_unitscale= 100.0f; // DIV2 units per OBJ unit
+static int   m9_bind     = 0;      // offset in mem[] of the m9 STRUCT (0=not bound)
+static int   m9_region   = 0;      // last region passed to START_MODE9 (0=full)
+static int   m9_occlude  = 1;      // 1=hide billboards behind geometry (z-buffer)
+static int   m9_ctype    = 200;    // value of c_m9 (automatic billboard ctype)
+static int   m9_collision= 1;      // 1=advance/xadvance don't go through walls (ON by default)
+static float far_clip    = 0.0f;   // max draw distance in OBJ units (0=no limit)
+// Focal constant: focal = viewport_width * m9_focal_k. Relation with the horizontal
+// FOV: m9_focal_k = 0.5/tan(FOV/2). Default FOCAL_K (~71 degrees).
+// Changed with MODE9_FOV(degrees); affects projection AND frustum culling.
 static float m9_focal_k  = FOCAL_K;
 
-// ---- Regiones de pantalla (como define_region + start_mode8) ----------------
-// La DLL no puede leer la tabla de regiones de DIV2, asi que mantiene la suya:
-// MODE9_REGION(n,x,y,w,h) registra el rectangulo de la region n (1..MAX_REGIONS-1)
-// y START_MODE9(cam,m9,n) lo usa como viewport. La region 0 es SIEMPRE la pantalla
-// completa (no se puede redefinir), igual que en start_mode8.
+// ---- Screen regions (like define_region + start_mode8) ----------------
+// The DLL can't read DIV2's region table, so it keeps its own:
+// MODE9_REGION(n,x,y,w,h) registers the rectangle of region n (1..MAX_REGIONS-1)
+// and START_MODE9(cam,m9,n) uses it as a viewport. Region 0 is ALWAYS the full
+// screen (can't be redefined), like in start_mode8.
 #define MAX_REGIONS 16
-static int reg_def[MAX_REGIONS];                 // 1 = region n definida
+static int reg_def[MAX_REGIONS];                 // 1 = region n defined
 static int reg_x[MAX_REGIONS], reg_y[MAX_REGIONS], reg_w[MAX_REGIONS], reg_h[MAX_REGIONS];
 
-// ---- Viewports (split-screen): cada vista tiene su camara, su m9 y su rect ---
-// vw==0 (o vh==0) significa "pantalla completa" (se resuelve al renderizar).
-// lastx/lastz: ultima posicion valida de la camara (para colision con barrido).
-// region: nº de region que sirve esta vista (-1 = ninguna; para reusar el slot).
+// ---- Viewports (split-screen): each view has its camera, its m9 and its rect ---
+// vw==0 (or vh==0) means "full screen" (resolved when rendering).
+// lastx/lastz: last valid camera position (for swept collision).
+// region: number of the region this view serves (-1 = none; to reuse the slot).
 typedef struct { int active,cam,bind,vx,vy,vw,vh,haslast,region; float lastx,lastz; } M9View;
 static M9View views[MAX_VIEWS];
 
-// Estado para convertir los procesos c_m9 a c_screen y restaurarlos despues de
-// que DIV2 los pinte (asi conservan sus coordenadas de MUNDO en x,y,z).
+// State to convert the c_m9 processes to c_screen and restore them after
+// DIV2 paints them (so they keep their WORLD coordinates in x,y,z).
 typedef struct { int base,wx,wy,wz,sz,gr,ct; } M9Spr;
 static M9Spr m9spr[MAX_SPR];
 static int   n_m9spr = 0;
 
-// ---- Color de ambiente / fondo ----------------------------------------------
+// ---- Ambient / background color ----------------------------------------------
 static int env_r=0, env_g=0, env_b=0;
 
-// ---- Niebla -----------------------------------------------------------------
-static char *fog_map = NULL;       // FOG_LEVELS * 256 bytes (remapeo de color)
+// ---- Fog -----------------------------------------------------------------
+static char *fog_map = NULL;       // FOG_LEVELS * 256 bytes (color remap)
 static int   fog_on  = 0;
-static float fog_near=0.0f, fog_far=1.0f;   // en uds OBJ
-// Factor (FOG_LEVELS-1)/(fog_far-fog_near): convierte profundidad -> nivel de
-// niebla con un solo multiplicar (evita la division de fog_level por pixel/seg).
+static float fog_near=0.0f, fog_far=1.0f;   // in OBJ units
+// Factor (FOG_LEVELS-1)/(fog_far-fog_near): converts depth -> fog level
+// with a single multiply (avoids the fog_level division per pixel/segment).
 static float fog_scale=0.0f;
 
-// ---- Paleta original (para restaurar en divend) -----------------------------
+// ---- Original palette (to restore at divend) -----------------------------
 static char orig_pal[(PAL_SHADES+1) * 3];
 
-// ---- Mensaje de estado ------------------------------------------------------
+// ---- Status message ------------------------------------------------------
 static char m9_msg[40];
 
-// ---- Punteros al runtime DIV2 -----------------------------------------------
+// ---- Pointers to the DIV2 runtime -----------------------------------------------
 static void *(*g_import)(char *name) = 0;
 static void  (*g_export)(char *name, void *p) = 0;
 
 // ============================================================================
-// Utilidades de string (sin libc)
+// String utilities (without libc)
 // ============================================================================
 static void s_cpy(char *d,const char *s){while(*s)*d++=*s++;*d=0;}
 static void s_cat(char *d,const char *s){while(*d)d++;while(*s)*d++=*s++;*d=0;}
@@ -532,9 +532,9 @@ static char *parse_face_vert(char *s,int *vi,int *uvi){
 }
 
 // ============================================================================
-// Raiz cuadrada inversa rapida (Quake's fast inverse sqrt).
-// Precision ~0.2% tras 1 iteracion de Newton: suficiente para colision/normal.
-// Evita las llamadas a sqrt() en el bucle de colision (O(n_walls)/frame).
+// Fast inverse square root (Quake's fast inverse sqrt).
+// ~0.2% precision after 1 Newton iteration: enough for collision/normal.
+// Avoids sqrt() calls in the collision loop (O(n_walls)/frame).
 // ============================================================================
 static float fast_rsqrt(float x){
     union { float f; unsigned long i; } u;
@@ -545,43 +545,43 @@ static float fast_rsqrt(float x){
 }
 
 // ============================================================================
-// Reciproco rapido 1/x (bit-hack + 1 paso de Newton, ~0.05% error). Evita la
-// division de la FPU (~73 ciclos en 486) en el rasterizador (1/w por segmento,
-// pendientes 1/dy por triangulo). Mismo orden de error que la aproximacion afin.
+// Fast reciprocal 1/x (bit-hack + 1 Newton step, ~0.05% error). Avoids the
+// FPU division (~73 cycles on a 486) in the rasterizer (1/w per segment,
+// 1/dy slopes per triangle). Same order of error as the affine approximation.
 // ============================================================================
 static float fast_recip(float x){
     union { float f; unsigned long i; } u;
     float xx=x;
-    u.f=x; u.i=0x7EF127EAUL-u.i;       // aproximacion inicial de 1/x
-    u.f=u.f*(2.0f-xx*u.f);            // 1 paso de Newton-Raphson
+    u.f=x; u.i=0x7EF127EAUL-u.i;       // initial approximation of 1/x
+    u.f=u.f*(2.0f-xx*u.f);            // 1 Newton-Raphson step
     return u.f;
 }
 
 // ============================================================================
-// float -> int rapido (truco del "magic number"). Watcom compila cada (int)float
-// como una llamada que guarda/cambia/restaura el control word de la FPU (~50-60
-// ciclos); esto lo elimina (redondeo al mas cercano, x86 little-endian, |x|<2^31).
+// fast float -> int ("magic number" trick). Watcom compiles each (int)float
+// as a call that saves/changes/restores the FPU control word (~50-60
+// cycles); this eliminates it (round to nearest, x86 little-endian, |x|<2^31).
 // ============================================================================
-// Techo (ceil) entero de un float, sin depender de ceilf (Watcom 10.6). Para el
-// rasterizado subpixel: primer centro de pixel (x+0.5) dentro de un borde.
+// Integer ceil of a float, without depending on ceilf (Watcom 10.6). For the
+// subpixel rasterizing: first pixel center (x+0.5) inside an edge.
 static int iceil(float a){ int i=(int)a; return (a>(float)i)?i+1:i; }
 
 static int fast_ftol(float x){
 #if M9_FAST_FTOL
-    // 'volatile' OBLIGA a guardar el double en memoria de 64 bits (redondeando
-    // desde los 80 bits del registro x87) ANTES de leer el dword bajo. Sin esto
-    // Watcom 10.6 dejaba el valor en el registro extendido y la lectura de la
-    // union daba basura -> coordenadas locas -> cuelgue. (x86 little-endian.)
+    // 'volatile' FORCES storing the double in 64-bit memory (rounding
+    // from the 80 bits of the x87 register) BEFORE reading the low dword. Without it
+    // Watcom 10.6 kept the value in the extended register and reading the
+    // union gave garbage -> crazy coordinates -> crash. (x86 little-endian.)
     volatile union { double d; int l[2]; } u;
     u.d=(double)x+6755399441055744.0;   // 2^52 + 2^51
-    return u.l[0];                       // dword bajo = entero redondeado
+    return u.l[0];                       // low dword = rounded integer
 #else
-    return (int)x;                       // conversion clasica (segura)
+    return (int)x;                       // classic (safe) conversion
 #endif
 }
 
 // ============================================================================
-// Localiza un proceso por su id en mem[]. Devuelve el offset base o -1.
+// Locates a process by its id in mem[]. Returns the base offset or -1.
 // ============================================================================
 static int find_process(int pid){
     int first,last,step,b;
@@ -596,7 +596,7 @@ static int find_process(int pid){
 }
 
 // ============================================================================
-// Color de paleta mas cercano (paleta DIV2, valores 6-bit en char*)
+// Nearest palette color (DIV2 palette, 6-bit values in char*)
 // ============================================================================
 static int nearest_pal(int r,int g,int b){
     int i,best=0; long bestd=0x7fffffffL;
@@ -612,8 +612,8 @@ static int nearest_pal(int r,int g,int b){
 }
 
 // ============================================================================
-// Construye el colormap de niebla: para cada nivel t y cada color de origen,
-// mezcla hacia (fr,fg,fb) y guarda el indice de paleta mas cercano.
+// Builds the fog colormap: for each level t and each source color,
+// blends toward (fr,fg,fb) and stores the nearest palette index.
 // ============================================================================
 static void build_fog_map(int fr,int fg,int fb){
     int lvl,c;
@@ -635,25 +635,25 @@ static void build_fog_map(int fr,int fg,int fb){
     }
 }
 
-// Indice de nivel de niebla para una profundidad dada (uds OBJ). Lineal con la
-// DISTANCIA real (como el modo 8): 0 en fog_near, FOG_LEVELS-1 (opaco) en fog_far.
-// fog_scale = (FOG_LEVELS-1)/(fog_far-fog_near) se precalcula en set_fog9.
+// Fog level index for a given depth (OBJ units). Linear with the real
+// DISTANCE (like mode 8): 0 at fog_near, FOG_LEVELS-1 (opaque) at fog_far.
+// fog_scale = (FOG_LEVELS-1)/(fog_far-fog_near) is precomputed in set_fog9.
 static int fog_level(float depth){
     float t;
     if(!fog_on) return 0;
     t=(depth-fog_near)*fog_scale;
     if(t<=0.0f) return 0;
     if(t>=(float)(FOG_LEVELS-1)) return FOG_LEVELS-1;
-    return fast_ftol(t);            // round-to-nearest rapido (evita el (int) lento
-                                    // de Watcom ~50-60 ciclos): t ya esta en [0,N) y >=0
+    return fast_ftol(t);            // fast round-to-nearest (avoids Watcom's slow (int)
+                                    // ~50-60 cycles): t is already in [0,N) and >=0
 
 }
 
 // ============================================================================
-// Rasterizador unificado con Z-BUFFER (occlusion) + textura perspecto-correcta
-// + niebla por pixel. Pintado FRONT-TO-BACK: el test de profundidad (barato)
-// rechaza los pixeles ya tapados ANTES de muestrear la textura (caro).
-//   zb almacena 1/w (mayor = mas cerca). tex=NULL -> color plano 'flatcol'.
+// Unified rasterizer with Z-BUFFER (occlusion) + perspective-correct texture
+// + per-pixel fog. FRONT-TO-BACK painting: the (cheap) depth test
+// rejects already-covered pixels BEFORE sampling the (expensive) texture.
+//   zb stores 1/w (larger = closer). tex=NULL -> flat color 'flatcol'.
 // ============================================================================
 static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
                     float xlf,float uwl,float vwl,float iwl,
@@ -664,9 +664,9 @@ static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
     int xStart,xEnd;
 
     if(y<clip_y0||y>=clip_y1)return;
-    // Line doubler: solo renderizar 1 de cada m9_downscale lineas (el resto se
-    // duplican tras el render, como en el SNES Doom). Lineas relativas al borde
-    // superior del viewport para que el patron empiece siempre en la misma fila.
+    // Line doubler: only render 1 of every m9_downscale lines (the rest are
+    // duplicated after the render, like in SNES Doom). Lines relative to the top
+    // edge of the viewport so the pattern always starts on the same row.
     if(m9_downscale>1 && ((y-clip_y0)%m9_downscale)!=0)return;
     if(xlf>xrf){
         tf=xlf;xlf=xrf;xrf=tf;
@@ -676,9 +676,9 @@ static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
     {float invdx=fast_recip(dx);
      duw=(uwr-uwl)*invdx; dvw=(vwr-vwl)*invdx; diw=(iwr-iwl)*invdx;}
 
-    // SUBPIXEL: el primer pixel es el de centro (x+0.5) >= xlf; se PRESTEPEAN las
-    // coords de textura a ese centro. Asi los vertices NO se "enganchan" a enteros
-    // (se acaba el temblor/serpenteo de texturas de la geometria que se mueve).
+    // SUBPIXEL: the first pixel is the center one (x+0.5) >= xlf; the texture
+    // coords are PRESTEPPED to that center. This way vertices don't "snap" to integers
+    // (it ends the texture shimmer/swimming of moving geometry).
     xStart=iceil(xlf-0.5f); xEnd=iceil(xrf-0.5f);
     if(xStart<clip_x0)xStart=clip_x0;
     if(xEnd>clip_x1)xEnd=clip_x1;
@@ -688,35 +688,35 @@ static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
 
     p=vid+y*W+xStart; zp=zb+y*W+xStart;
     {
-        // Profundidad en punto fijo: paso constante en toda la scanline.
+        // Depth in fixed point: constant step across the whole scanline.
         int zstep=fast_ftol(diw*ZSCALE);
         float tuf=(float)tw, tvf=(float)th;
-        int twm=tw-1, thm=th-1;       // mascaras (validas solo si pow2)
+        int twm=tw-1, thm=th-1;       // masks (valid only if pow2)
         int total=xEnd-xStart, xi=0;
         while(xi<total){
             int seg=total-xi; if(seg>cur_seg)seg=cur_seg;
             {
-                // Una sola division 1/w en cada extremo del segmento; las coords
-                // de textura se interpolan en PUNTO FIJO 16.16 (enteros) dentro.
+                // A single 1/w division at each end of the segment; the texture
+                // coords are interpolated in 16.16 FIXED POINT (integers) inside.
                 float w0=(ciw>1e-6f)?fast_recip(ciw):1e6f;
                 float cuw_e=cuw+duw*(float)seg, cvw_e=cvw+dvw*(float)seg, ciw_e=ciw+diw*(float)seg;
                 float w1=(ciw_e>1e-6f)?fast_recip(ciw_e):1e6f;
                 float invseg=fast_recip((float)seg);
-                float tu0=cuw*w0*tuf, tv0=cvw*w0*tvf;     // texel en el extremo izq
-                float tu1=cuw_e*w1*tuf, tv1=cvw_e*w1*tvf; // texel en el extremo der
+                float tu0=cuw*w0*tuf, tv0=cvw*w0*tvf;     // texel at the left end
+                float tu1=cuw_e*w1*tuf, tv1=cvw_e*w1*tvf; // texel at the right end
                 int tu=fast_ftol(tu0*65536.0f), tv=fast_ftol(tv0*65536.0f);
                 int stu=fast_ftol((tu1-tu0)*invseg*65536.0f);
                 int stv=fast_ftol((tv1-tv0)*invseg*65536.0f);
-                int zfix=fast_ftol(ciw*ZSCALE);            // resync por segmento (sin deriva)
-                // Niebla por la PROFUNDIDAD real del segmento (w0=1/ciw). Lineal con
-                // la distancia (como el modo 8); 1 nivel por tramo de cur_seg px.
+                int zfix=fast_ftol(ciw*ZSCALE);            // per-segment resync (no drift)
+                // Fog by the real DEPTH of the segment (w0=1/ciw). Linear with
+                // distance (like mode 8); 1 level per cur_seg px span.
                 int lv=fog_on?fog_level(w0):0;
                 char *fm=(lv>0)?&fog_map[lv*256]:0;
                 int k;
-                // Las ramas tex/fog/flat se sacan FUERA del bucle de pixeles:
-                // dentro solo queda el z-test + muestreo (sin condicionales).
-                // Desenrollado x2: la mitad de comparaciones/saltos de control del
-                // bucle por pixel (el cuerpo es corto, asi que el overhead pesaba).
+                // The tex/fog/flat branches are taken OUT of the pixel loop:
+                // inside only the z-test + sampling remain (no conditionals).
+                // Unrolled x2: half the comparisons/control jumps of the
+                // per-pixel loop (the body is short, so the overhead mattered).
                 #define M9_PIX(SAMPLE) \
                     if(zfix>*zp){ *p=(SAMPLE); *zp=(unsigned short)zfix; } \
                     p++; zp++; tu+=stu; tv+=stv; zfix+=zstep;
@@ -726,13 +726,13 @@ static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
                       if(seg&1){ M9_PIX(SAMPLE) } }
                 if(tex){
                     if(pow2){
-                        // Sin clamp: AND con mascara (textura potencia de 2). El
-                        // offset de fila usa SHIFT (twsh=log2(tw)) en vez de un imul
-                        // por pixel: ~10-40 ciclos menos por pixel en 486 (bit-exacto).
+                        // No clamp: AND with mask (power-of-2 texture). The
+                        // row offset uses a SHIFT (twsh=log2(tw)) instead of an imul
+                        // per pixel: ~10-40 fewer cycles per pixel on a 486 (bit-exact).
                         if(fm){ M9_SPAN(fm[(unsigned char)tex[(((tv>>16)&thm)<<twsh)+((tu>>16)&twm)]]) }
                         else  { M9_SPAN(tex[(((tv>>16)&thm)<<twsh)+((tu>>16)&twm)]) }
                     } else {
-                        // Fallback con clamp (textura no potencia de 2).
+                        // Fallback with clamp (non power-of-2 texture).
                         for(k=0;k<seg;k++){
                             if(zfix>*zp){
                                 int tx=tu>>16, ty=tv>>16;
@@ -747,7 +747,7 @@ static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
                         }
                     }
                 } else {
-                    // Flat: el color (con o sin niebla) es constante en el segmento.
+                    // Flat: the color (with or without fog) is constant across the segment.
                     unsigned char pxf=fm?(unsigned char)fm[flatcol]:flatcol;
                     M9_SPAN((char)pxf)
                 }
@@ -760,17 +760,17 @@ static void hspan_z(char *vid,unsigned short *zb,int W,int H,int y,
     }
 }
 
-// Evalua un borde (arista) en el CENTRO de scanline cy: posicion x + atributos.
+// Evaluates an edge at the CENTER of scanline cy: x position + attributes.
 static void edge_at(float cy,float ya,float xa,float uwa,float vwa,float iwa,
                     float gx,float gu,float gv,float gi,
                     float *ox,float *ou,float *ov,float *oi){
     float s=cy-ya; *ox=xa+gx*s; *ou=uwa+gu*s; *ov=vwa+gv*s; *oi=iwa+gi*s;
 }
 
-// Rasteriza un triangulo con Z-buffer, coordenadas SUBPIXEL (vertices en float).
-// El muestreo es en los centros de pixel (x+0.5, y+0.5) con prestep, de modo que
-// los vertices NO se cuantizan a enteros -> sin temblor/serpenteo de texturas al
-// mover la geometria (el artefacto "PS1"). tex=NULL -> color plano 'flatcol'.
+// Rasterizes a triangle with Z-buffer, SUBPIXEL coordinates (vertices in float).
+// Sampling is at pixel centers (x+0.5, y+0.5) with prestep, so that
+// vertices are NOT quantized to integers -> no texture shimmer/swimming when
+// moving the geometry (the "PS1" artifact). tex=NULL -> flat color 'flatcol'.
 static void raster_tri_z(char *vid,unsigned short *zb,int W,int H,
     float x0,float y0,float u0,float v0,float w0,
     float x1,float y1,float u1,float v1,float w1,
@@ -779,19 +779,19 @@ static void raster_tri_z(char *vid,unsigned short *zb,int W,int H,
     int pow2,y,yA,yB,twsh=0;float tf;
     float iw0,iw1,iw2,uw0,vw0,uw1,vw1,uw2,vw2;
 
-    // w no puede bajar de NEAR_PLANE: garantiza 1/w*ZSCALE <= 65535 (z 16 bits).
+    // w can't drop below NEAR_PLANE: guarantees 1/w*ZSCALE <= 65535 (16-bit z).
     if(w0<NEAR_PLANE)w0=NEAR_PLANE; if(w1<NEAR_PLANE)w1=NEAR_PLANE; if(w2<NEAR_PLANE)w2=NEAR_PLANE;
     cur_seg = m9_texseg;
     pow2=(tex && (tw&(tw-1))==0 && (th&(th-1))==0);
-    if(pow2){int t2=tw; while(t2>1){t2>>=1;twsh++;}}   // log2(tw) para el shift por pixel
-    // 1/w de los 3 vertices: reciproco rapido (bit-hack) en vez de division FPU.
-    // w>=NEAR_PLANE (clampeado arriba), error ~0.05% (ya tolerado en todo el motor).
+    if(pow2){int t2=tw; while(t2>1){t2>>=1;twsh++;}}   // log2(tw) for the per-pixel shift
+    // 1/w of the 3 vertices: fast reciprocal (bit-hack) instead of FPU division.
+    // w>=NEAR_PLANE (clamped above), error ~0.05% (already tolerated throughout the engine).
     iw0=fast_recip(w0); iw1=fast_recip(w1); iw2=fast_recip(w2);
     uw0=u0*iw0; vw0=v0*iw0;
     uw1=u1*iw1; vw1=v1*iw1;
     uw2=u2*iw2; vw2=v2*iw2;
 
-    // Ordenar los 3 vertices por Y (float), arrastrando x y atributos u/w,v/w,1/w.
+    // Sort the 3 vertices by Y (float), dragging x and the u/w,v/w,1/w attributes.
     #define SW(a,b) tf=(a);(a)=(b);(b)=tf;
     #define S2(ya,xa,ua,va,ia, yb,xb,ub,vb,ib) \
         if(ya>yb){SW(ya,yb) SW(xa,xb) SW(ua,ub) SW(va,vb) SW(ia,ib)}
@@ -804,14 +804,14 @@ static void raster_tri_z(char *vid,unsigned short *zb,int W,int H,
     if(y2-y0<1e-4f)return;
 
     {
-    // Pendientes por unidad de Y (no por scanline): el borde se evalua en el
-    // CENTRO de cada scanline (cy=y+0.5). Se calcula 1 reciproco por arista y se
-    // multiplica (4 mul) en vez de 4 divisiones FPU (~73 ciclos cada una en 486).
+    // Slopes per unit of Y (not per scanline): the edge is evaluated at the
+    // CENTER of each scanline (cy=y+0.5). 1 reciprocal per edge is computed and
+    // multiplied (4 mul) instead of 4 FPU divisions (~73 cycles each on a 486).
     float ril=1.0f/(y2-y0);
-    float gxl=(x2-x0)*ril, gul=(uw2-uw0)*ril;   // arista larga 0->2
+    float gxl=(x2-x0)*ril, gul=(uw2-uw0)*ril;   // long edge 0->2
     float gvl=(vw2-vw0)*ril, gil=(iw2-iw0)*ril;
 
-    if(y1-y0>1e-4f){   // mitad superior: arista corta 0->1
+    if(y1-y0>1e-4f){   // top half: short edge 0->1
         float ris=1.0f/(y1-y0);
         float gxs=(x1-x0)*ris, gus=(uw1-uw0)*ris;
         float gvs=(vw1-vw0)*ris, gis=(iw1-iw0)*ris;
@@ -824,7 +824,7 @@ static void raster_tri_z(char *vid,unsigned short *zb,int W,int H,
             hspan_z(vid,zb,W,H,y,xl,ul,vl,il,xs,us,vs,is,tex,tw,th,pow2,twsh,flatcol);
         }
     }
-    if(y2-y1>1e-4f){   // mitad inferior: arista corta 1->2 (la larga continua)
+    if(y2-y1>1e-4f){   // bottom half: short edge 1->2 (the long one continues)
         float ris=1.0f/(y2-y1);
         float gxs=(x2-x1)*ris, gus=(uw2-uw1)*ris;
         float gvs=(vw2-vw1)*ris, gis=(iw2-iw1)*ris;
@@ -840,11 +840,11 @@ static void raster_tri_z(char *vid,unsigned short *zb,int W,int H,
     }
 }
 
-static unsigned char flat_color(int a,int b,int c);   // (definida mas abajo)
-static int load_fpg_file(char *fname);                // (definida mas abajo)
+static unsigned char flat_color(int a,int b,int c);   // (defined below)
+static int load_fpg_file(char *fname);                // (defined below)
 
 // ============================================================================
-// Rejilla espacial: rango de celdas (XZ) que solapa el footprint de un triangulo.
+// Spatial grid: range of cells (XZ) overlapped by a triangle's footprint.
 // ============================================================================
 static void tri_cellrange(int t,int *x0,int *x1,int *z0,int *z1){
     int a=mesh_t[t].a,b=mesh_t[t].b,c=mesh_t[t].c;
@@ -859,15 +859,15 @@ static void tri_cellrange(int t,int *x0,int *x1,int *z0,int *z1){
     if(*z0<0)*z0=0; if(*z1>=GRID_DIM)*z1=GRID_DIM-1; if(*z1<*z0)*z1=*z0;
 }
 
-// Construye la rejilla espacial de la malla actual. Devuelve 1 si OK, 0 si no se
-// pudo (entonces grid_n=0 y el render recorre todos los triangulos: fallback).
+// Builds the spatial grid of the current mesh. Returns 1 if OK, 0 if it
+// couldn't (then grid_n=0 and the render scans all triangles: fallback).
 static int build_grid(void){
     int i,gx,gz,t,total=0;
     float minx,minz,maxx,maxz;
     static int cur[GRID_CELLS];
     grid_n=0;
 #if !M9_USE_GRID
-    return 0;                            // rejilla desactivada (toggle): recorre todo
+    return 0;                            // grid disabled (toggle): scan everything
 #endif
     if(n_tris<=0||n_verts<=0) return 0;
     minx=minz=1e30f; maxx=maxz=-1e30f;
@@ -879,18 +879,18 @@ static int build_grid(void){
     if(maxx<=minx)maxx=minx+1.0f; if(maxz<=minz)maxz=minz+1.0f;
     grid_minx=minx; grid_minz=minz;
     grid_cw=(maxx-minx)/(float)GRID_DIM; grid_ch=(maxz-minz)/(float)GRID_DIM;
-    // 0.999999 para que el vertice del borde maximo caiga en la celda GRID_DIM-1.
+    // 0.999999 so the max-edge vertex falls into cell GRID_DIM-1.
     grid_invcw=(float)GRID_DIM/(maxx-minx)*0.999999f;
     grid_invch=(float)GRID_DIM/(maxz-minz)*0.999999f;
     grid_cellrad=0.5f*(float)sqrt((double)(grid_cw*grid_cw+grid_ch*grid_ch));
-    // 1a pasada: contar triangulos por celda (en start[c+1]).
+    // 1st pass: count triangles per cell (in start[c+1]).
     for(i=0;i<=GRID_CELLS;i++) grid_start[i]=0;
     for(t=0;t<n_tris;t++){
         int x0,x1,z0,z1; tri_cellrange(t,&x0,&x1,&z0,&z1);
         for(gz=z0;gz<=z1;gz++) for(gx=x0;gx<=x1;gx++){ grid_start[gz*GRID_DIM+gx+1]++; total++; }
     }
-    // Reservar (div_malloc) grid_items al tamaño exacto y tstamp a n_tris. Si
-    // falla la reserva -> grid_n=0 y el render recorre todos los triangulos.
+    // Reserve (div_malloc) grid_items at the exact size and tstamp at n_tris. If
+    // the allocation fails -> grid_n=0 and the render scans all triangles.
     if(total>grid_cap){
         if(grid_items)div_free(grid_items);
         grid_items=(int*)div_malloc((size_t)total*sizeof(int));
@@ -903,9 +903,9 @@ static int build_grid(void){
         if(!tstamp){tstamp_cap=0;return 0;}
         tstamp_cap=n_tris;
     }
-    {int k; for(k=0;k<n_tris;k++) tstamp[k]=0;}   // sin sellos rancios
+    {int k; for(k=0;k<n_tris;k++) tstamp[k]=0;}   // no stale stamps
     for(i=1;i<=GRID_CELLS;i++) grid_start[i]+=grid_start[i-1];
-    // 2a pasada: volcar indices de triangulo en su sitio.
+    // 2nd pass: dump triangle indices into place.
     for(i=0;i<GRID_CELLS;i++) cur[i]=grid_start[i];
     for(t=0;t<n_tris;t++){
         int x0,x1,z0,z1; tri_cellrange(t,&x0,&x1,&z0,&z1);
@@ -916,8 +916,8 @@ static int build_grid(void){
 }
 
 // ============================================================================
-// Rejilla espacial de paredes: rango de celdas (XZ) que solapa un segmento-pared.
-// Usa la MISMA geometria de celdas que la rejilla de render (ya calculada).
+// Wall spatial grid: range of cells (XZ) overlapped by a wall segment.
+// Uses the SAME cell geometry as the render grid (already computed).
 // ============================================================================
 static void wall_cellrange(int w,int *x0,int *x1,int *z0,int *z1){
     float ax=mesh_walls[w].x0,bx=mesh_walls[w].x1;
@@ -930,9 +930,9 @@ static void wall_cellrange(int w,int *x0,int *x1,int *z0,int *z1){
     if(*z0<0)*z0=0; if(*z1>=GRID_DIM)*z1=GRID_DIM-1; if(*z1<*z0)*z1=*z0;
 }
 
-// Construye la rejilla de paredes. Requiere que la rejilla de render ya este hecha
-// (grid_n) para reutilizar su geometria de celdas. Devuelve 1 si OK, 0 si no
-// (entonces wgrid_n=0 y la colision recorre todas las paredes: fallback seguro).
+// Builds the wall grid. Requires the render grid to be already built
+// (grid_n) to reuse its cell geometry. Returns 1 if OK, 0 if not
+// (then wgrid_n=0 and collision scans all walls: safe fallback).
 static int build_wall_grid(void){
     int w,gx,gz,total=0;
     static int wcur[GRID_CELLS];
@@ -958,13 +958,13 @@ static int build_wall_grid(void){
         int x0,x1,z0,z1; wall_cellrange(w,&x0,&x1,&z0,&z1);
         for(gz=z0;gz<=z1;gz++) for(gx=x0;gx<=x1;gx++){ int c=gz*GRID_DIM+gx; wgrid_items[wcur[c]++]=w; }
     }
-    {int i; for(i=0;i<MAX_WALLS;i++) wstamp[i]=0;}   // sin sellos rancios
+    {int i; for(i=0;i<MAX_WALLS;i++) wstamp[i]=0;}   // no stale stamps
     wstamp_frame=0; wgrid_n=1;
     return 1;
 }
 
-// Rellena wcand[] con las paredes cuyo footprint solapa el rectangulo XZ dado
-// (deduplicadas). Si no hay rejilla de paredes, devuelve TODAS (fallback).
+// Fills wcand[] with the walls whose footprint overlaps the given XZ rectangle
+// (deduplicated). If there's no wall grid, returns ALL (fallback).
 static void gather_walls(float minx,float minz,float maxx,float maxz){
     n_wcand=0;
 #if M9_COLLIDE_GRID
@@ -972,18 +972,18 @@ static void gather_walls(float minx,float minz,float maxx,float maxz){
         int cx0=(int)((minx-grid_minx)*grid_invcw), cx1=(int)((maxx-grid_minx)*grid_invcw);
         int cz0=(int)((minz-grid_minz)*grid_invch), cz1=(int)((maxz-grid_minz)*grid_invch);
         int gx,gz;
-        // +1 celda de anillo: cubre que un empuje cruce a la celda vecina (las 2
-        // pasadas pueden mover al jugador algo mas alla de la caja metrica).
+        // +1 ring cell: covers a push crossing into the neighbor cell (the 2
+        // passes can move the player a bit beyond the metric box).
         cx0--; cx1++; cz0--; cz1++;
         if(cx0<0)cx0=0; if(cx1>=GRID_DIM)cx1=GRID_DIM-1;
         if(cz0<0)cz0=0; if(cz1>=GRID_DIM)cz1=GRID_DIM-1;
-        if(cx1<cx0||cz1<cz0) return;   // caja fuera de la rejilla -> sin paredes cerca
+        if(cx1<cx0||cz1<cz0) return;   // box outside the grid -> no walls nearby
         wstamp_frame++;
         for(gz=cz0;gz<=cz1;gz++) for(gx=cx0;gx<=cx1;gx++){
             int c=gz*GRID_DIM+gx, s=wgrid_start[c], e=wgrid_start[c+1], k;
             for(k=s;k<e;k++){
                 int w=wgrid_items[k];
-                if(wstamp[w]==wstamp_frame) continue;   // ya añadida (otra celda)
+                if(wstamp[w]==wstamp_frame) continue;   // already added (another cell)
                 wstamp[w]=wstamp_frame;
                 wcand[n_wcand++]=w;
             }
@@ -995,11 +995,11 @@ static void gather_walls(float minx,float minz,float maxx,float maxz){
 }
 
 // ============================================================================
-// load_obj_file: carga una malla OBJ (con UVs opcionales). Devuelve nº de tris.
+// load_obj_file: loads an OBJ mesh (with optional UVs). Returns num tris.
 // ============================================================================
 static int load_obj_file(char *fname){
     char line[256],*p;
-    char mat_names[MAX_MATS][32];   // nombres de material por orden de aparicion
+    char mat_names[MAX_MATS][32];   // material names by order of appearance
     int n_mat_names=0, cur_mat=0;
     FILE *f;
     int vi[16],uvi[16],nv,i;
@@ -1025,12 +1025,12 @@ static int load_obj_file(char *fname){
             if(n_uvs<MAX_UVS){
                 p=line+3;
                 mesh_uv[n_uvs].u=sc_atof(p); p=next_tok(p);
-                mesh_uv[n_uvs].v=1.0f-sc_atof(p);   // OBJ V=0 abajo, MAP fila0 arriba
+                mesh_uv[n_uvs].v=1.0f-sc_atof(p);   // OBJ V=0 bottom, MAP row 0 top
                 n_uvs++;
             }
         } else if(line[0]=='u'&&line[1]=='s'&&line[2]=='e'&&line[3]=='m'&&
                   line[4]=='t'&&line[5]=='l'&&(line[6]==' '||line[6]=='\t')){
-            // usemtl <nombre>: registrar el nombre y obtener su indice (0-based)
+            // usemtl <name>: register the name and get its index (0-based)
             char *mn=line+7; int j,k,found=-1,mlen=0;
             while(*mn==' '||*mn=='\t')mn++;
             while(mn[mlen]&&mn[mlen]!=' '&&mn[mlen]!='\t'&&mlen<31)mlen++;
@@ -1070,16 +1070,16 @@ static int load_obj_file(char *fname){
 
     has_uvs=(n_uvs>0);
     mesh_ok=(n_tris>0);
-    // Precalcular el color de flat-shading de cada triangulo UNA vez (la normal
-    // y la luz no cambian): evita un sqrt + normalizacion por triangulo y frame.
+    // Precompute each triangle's flat-shading color ONCE (the normal
+    // and the light don't change): avoids a sqrt + normalization per triangle and frame.
     for(i=0;i<n_tris;i++)
         mesh_t[i].flat=flat_color(mesh_t[i].a,mesh_t[i].b,mesh_t[i].c);
 
-    // Precalcular el "footprint" 2D (plano XZ) de las paredes para la colision:
-    // un triangulo cuya normal es casi horizontal (|ny|<WALL_NY) es una PARED;
-    // su proyeccion en XZ es un segmento (el par de vertices mas separados).
-    // Se guarda tambien su extension vertical [ymin,ymax] para no chocar con
-    // tejados o dinteles que estan por encima del jugador (p.ej. el porton).
+    // Precompute the 2D "footprint" (XZ plane) of the walls for collision:
+    // a triangle whose normal is nearly horizontal (|ny|<WALL_NY) is a WALL;
+    // its XZ projection is a segment (the pair of farthest-apart vertices).
+    // Its vertical extent [ymin,ymax] is also stored to not collide with
+    // roofs or lintels above the player (e.g. the gate).
     n_walls=0; n_floors=0;
     for(i=0;i<n_tris;i++){
         int a=mesh_t[i].a,b=mesh_t[i].b,c=mesh_t[i].c;
@@ -1089,14 +1089,14 @@ static int load_obj_file(char *fname){
         float nl=(float)sqrt((double)(nx*nx+ny*ny+nz*nz));
         if(nl<1e-6f)continue;
         if((ny<0?-ny:ny)/nl >= WALL_NY){
-            // Casi horizontal -> SUELO/TECHO: candidato de suelo para escalones y
-            // rampas (floor-follow). No es una pared, no entra en mesh_walls.
+            // Nearly horizontal -> FLOOR/CEILING: floor candidate for steps and
+            // ramps (floor-follow). It's not a wall, doesn't go into mesh_walls.
             if(n_floors<MAX_FLOORS) mesh_floor_idx[n_floors++]=i;
             continue;
         }
-        if(n_walls>=MAX_WALLS) continue;            // pared (muro casi vertical)
+        if(n_walls>=MAX_WALLS) continue;            // wall (nearly vertical)
         {
-            // par de vertices mas separados en XZ -> extremos del segmento
+            // pair of farthest-apart vertices in XZ -> segment ends
             float px[3],pz[3],py[3]; int vidx[3],j,e0=0,e1=1; float best=-1.0f;
             px[0]=mesh_v[a].x;pz[0]=mesh_v[a].z;py[0]=mesh_v[a].y;vidx[0]=a;
             px[1]=mesh_v[b].x;pz[1]=mesh_v[b].z;py[1]=mesh_v[b].y;vidx[1]=b;
@@ -1109,25 +1109,25 @@ static int load_obj_file(char *fname){
             mesh_walls[n_walls].x0=px[e0]; mesh_walls[n_walls].z0=pz[e0];
             mesh_walls[n_walls].x1=px[e1]; mesh_walls[n_walls].z1=pz[e1];
             mesh_walls[n_walls].vi0=vidx[e0]; mesh_walls[n_walls].vi1=vidx[e1];
-            mesh_walls[n_walls].cap0=1; mesh_walls[n_walls].cap1=1;   // por defecto: extremo libre
+            mesh_walls[n_walls].cap0=1; mesh_walls[n_walls].cap1=1;   // by default: free end
             {float y0=py[0],y1=py[0],t; t=py[1];if(t<y0)y0=t;if(t>y1)y1=t;
              t=py[2];if(t<y0)y0=t;if(t>y1)y1=t;
              mesh_walls[n_walls].ymin=y0; mesh_walls[n_walls].ymax=y1;}
             n_walls++;
         }
     }
-    // Tapas de extremo: un extremo que coincide (en XZ) con el de otra pared es
-    // INTERIOR (junta entre segmentos del mismo muro, esquina, jamba de puerta...).
-    // Quitarle la "tapa" radial evita el enganche al deslizar; la cara contigua ya
-    // frena. Solo los extremos REALMENTE aislados conservan su tapa.
-    // IMPORTANTE: se agrupa por POSICION XZ y no por indice de vertice, porque el
-    // mismo punto fisico (p.ej. arriba/abajo de una arista vertical, o el muro y el
-    // dintel de una puerta) suele tener varios indices de vertice distintos. Esa
-    // era la causa de los falsos bloqueos en los extremos del porton de la muralla.
+    // End caps: an end that coincides (in XZ) with another wall's is
+    // INTERIOR (joint between segments of the same wall, corner, door jamb...).
+    // Removing its radial "cap" avoids snagging when sliding; the adjacent face already
+    // stops you. Only the TRULY isolated ends keep their cap.
+    // IMPORTANT: grouped by XZ POSITION and not by vertex index, because the
+    // same physical point (e.g. top/bottom of a vertical edge, or the wall and
+    // the lintel of a door) usually has several different vertex indices. That
+    // was the cause of the false blocks at the ends of the rampart gate.
 #if M9_CORNER_SLIDE
     if(n_walls>0){
-        int wv,k; float eps2=0.02f*0.02f;   // ~2 uds DIV2 (unitscale 100): coincidencia XZ
-        // 1) agrupar vertices coincidentes en XZ -> representante (el mas temprano)
+        int wv,k; float eps2=0.02f*0.02f;   // ~2 DIV2 units (unitscale 100): XZ coincidence
+        // 1) group coincident vertices in XZ -> representative (the earliest)
         for(wv=0;wv<n_verts;wv++){
             vgroup[wv]=wv;
             for(k=0;k<wv;k++){
@@ -1135,22 +1135,22 @@ static int load_obj_file(char *fname){
                 if(dxx*dxx+dzz*dzz<=eps2){ vgroup[wv]=vgroup[k]; break; }
             }
         }
-        // 2) contar extremos de pared por GRUPO de posicion
+        // 2) count wall ends per position GROUP
         for(wv=0;wv<n_verts;wv++) wall_vc[wv]=0;
         for(wv=0;wv<n_walls;wv++){
             wall_vc[vgroup[mesh_walls[wv].vi0]]++;
             wall_vc[vgroup[mesh_walls[wv].vi1]]++;
         }
-        // 3) extremo en un grupo con >=2 paredes -> interior -> sin tapa radial
+        // 3) end in a group with >=2 walls -> interior -> no radial cap
         for(wv=0;wv<n_walls;wv++){
             if(wall_vc[vgroup[mesh_walls[wv].vi0]]>1) mesh_walls[wv].cap0=0;
             if(wall_vc[vgroup[mesh_walls[wv].vi1]]>1) mesh_walls[wv].cap1=0;
         }
     }
 #endif
-    // Rejilla espacial XZ para el culling de triangulos por celdas (Tier 3).
+    // XZ spatial grid for per-cell triangle culling (Tier 3).
     build_grid();
-    build_wall_grid();   // rejilla de paredes para acelerar la colision
+    build_wall_grid();   // wall grid to speed up collision
     {char num[12];
      s_cpy(m9_msg,"M9 ");s_itos(n_tris,num);s_cat(m9_msg,num);
      s_cat(m9_msg,has_uvs?" tri+UV":" tri");}
@@ -1158,9 +1158,9 @@ static int load_obj_file(char *fname){
 }
 
 // ============================================================================
-// build_mip_for: genera el mipmap de 1 nivel (mitad de ancho/alto) para el
-// material m. Muestreo de punto (indices de paleta: no se promedian). Mejora la
-// coherencia de cache al texturar superficies lejanas.
+// build_mip_for: generates the 1-level mipmap (half width/height) for
+// material m. Point sampling (palette indices: not averaged). Improves
+// cache coherence when texturing distant surfaces.
 // ============================================================================
 static void build_mip_for(int m){
     int mw,mh,x,y;
@@ -1181,8 +1181,8 @@ static void build_mip_for(int m){
 }
 
 // ============================================================================
-// load_material_file: carga una textura .MAP en el slot de material m (0..MAX_MATS-1).
-// Libera el buffer anterior de ese slot antes de cargar (sin leaks). Devuelve 1/0.
+// load_material_file: loads a .MAP texture into material slot m (0..MAX_MATS-1).
+// Frees that slot's previous buffer before loading (no leaks). Returns 1/0.
 // ============================================================================
 static int load_material_file(int m, char *fname){
     char magic[8];
@@ -1204,7 +1204,7 @@ static int load_material_file(int m, char *fname){
         if((int)fread(&sw,2,1,f)!=1||(int)fread(&sh,2,1,f)!=1){
             s_cpy(m9_msg,"TEX dim err");div_fclose(f);return 0;
         }
-        fseek(f,1380L,SEEK_CUR);     // codigo(4)+nombre(32)+paleta(768)+rangos(576)
+        fseek(f,1380L,SEEK_CUR);     // code(4)+name(32)+palette(768)+ranges(576)
         if((int)fread(&snp,2,1,f)!=1){
             s_cpy(m9_msg,"TEX npts err");div_fclose(f);return 0;
         }
@@ -1224,31 +1224,31 @@ static int load_material_file(int m, char *fname){
     }
     mat_w[m]=w; mat_h[m]=h;
     div_fclose(f);
-    build_mip_for(m);                    // mipmap de 1 nivel para LOD/cache
+    build_mip_for(m);                    // 1-level mipmap for LOD/cache
     {char num[12];s_cpy(m9_msg,"TEX ");s_itos(w,num);s_cat(m9_msg,num);
      s_cat(m9_msg,"x");s_itos(h,num);s_cat(m9_msg,num);}
     return 1;
 }
 
 // ============================================================================
-// LOAD_WLD9(obj, textura, unitscale): carga el escenario en UNA sola llamada
-// (analogo a load_wld del modo 8 pero con textura y escala integradas).
-//   obj       : fichero .OBJ del escenario (Y-up, triangulado, con UVs).
-//   textura   : fichero .MAP de la textura ("" o "0" = sin textura -> flat).
-//   unitscale : uds DIV2 por unidad OBJ (<=0 = no cambiar, def 100).
-// Devuelve nº de triangulos cargados (0 si fallo).
+// LOAD_WLD9(obj, texture, unitscale): loads the scenario in ONE single call
+// (analogous to mode 8's load_wld but with texture and scale integrated).
+//   obj       : .OBJ file of the scenario (Y-up, triangulated, with UVs).
+//   texture   : .MAP texture file ("" or "0" = no texture -> flat).
+//   unitscale : DIV2 units per OBJ unit (<=0 = unchanged, def 100).
+// Returns num triangles loaded (0 on failure).
 // ============================================================================
 static void load_wld9_fn(void){
-    int scale  =getparm();          // 3er arg: unitscale
-    int tex_off=getparm();          // 2do arg: fichero de textura
-    int obj_off=getparm();          // 1er arg: fichero OBJ
+    int scale  =getparm();          // 3rd arg: unitscale
+    int tex_off=getparm();          // 2nd arg: texture file
+    int obj_off=getparm();          // 1st arg: OBJ file
     char fname[64], tname[64];
     int ntris, m;
 
     if(scale>0) m9_unitscale=(float)scale;
 
     div2c(obj_off,fname,sizeof(fname));
-    // Liberar TODOS los materiales del nivel anterior antes de cargar el nuevo.
+    // Free ALL the previous level's materials before loading the new one.
     for(m=0;m<MAX_MATS;m++){
         if(mat_data[m]){div_free(mat_data[m]);mat_data[m]=NULL;mat_w[m]=mat_h[m]=0;}
         if(mat_mip[m]){div_free(mat_mip[m]);mat_mip[m]=NULL;matm_w[m]=matm_h[m]=0;}
@@ -1257,13 +1257,13 @@ static void load_wld9_fn(void){
 
     div2c(tex_off,tname,sizeof(tname));
     if(tname[0] && !(tname[0]=='0'&&tname[1]==0)){
-        load_material_file(0,tname);  // textura por defecto en slot 0
+        load_material_file(0,tname);  // default texture in slot 0
     }
     retval(ntris);
 }
 
-// MODE9_SETTEX(map): cambia la textura del material 0 (por defecto).
-// Equivale a MODE9_MATERIAL(0,"MAP/..."). Devuelve 1/0.
+// MODE9_SETTEX(map): changes the texture of material 0 (default).
+// Equivalent to MODE9_MATERIAL(0,"MAP/..."). Returns 1/0.
 static void mode9_settex_fn(void){
     int str_off=getparm();
     char fname[64];
@@ -1271,10 +1271,10 @@ static void mode9_settex_fn(void){
     retval(load_material_file(0,fname));
 }
 
-// MODE9_MATERIAL(idx, map): asigna una textura .MAP al material idx (0..15).
-// idx 0 = material por defecto (el que se cargo en LOAD_WLD9).
-// Llama despues de LOAD_WLD9, una vez por material que quieras personalizar.
-// Si el idx ya tenia textura, la libera antes (sin leaks). Devuelve 1/0.
+// MODE9_MATERIAL(idx, map): assigns a .MAP texture to material idx (0..15).
+// idx 0 = default material (the one loaded in LOAD_WLD9).
+// Call after LOAD_WLD9, once per material you want to customize.
+// If idx already had a texture, it's freed first (no leaks). Returns 1/0.
 static void mode9_material_fn(void){
     int str_off=getparm();
     int idx    =getparm();
@@ -1284,9 +1284,9 @@ static void mode9_material_fn(void){
 }
 
 // ============================================================================
-// load_sky_file: carga una textura .MAP panoramica como cielo. Igual formato que
-// las texturas (indices contra la paleta DIV2 activa). Devuelve 1/0. La textura
-// debe envolver 360º en horizontal (su borde izquierdo y derecho deben casar).
+// load_sky_file: loads a panoramic .MAP texture as sky. Same format as
+// textures (indices against the active DIV2 palette). Returns 1/0. The texture
+// must wrap 360deg horizontally (its left and right edges must match).
 // ============================================================================
 static int load_sky_file(char *fname){
     char magic[8]; FILE *f; int w,h,npoints,pix_size;
@@ -1299,7 +1299,7 @@ static int load_sky_file(char *fname){
     }
     {unsigned short sw=0,sh=0,snp=0;
      if((int)fread(&sw,2,1,f)!=1||(int)fread(&sh,2,1,f)!=1){s_cpy(m9_msg,"SKY dim err");div_fclose(f);return 0;}
-     fseek(f,1380L,SEEK_CUR);     // codigo(4)+nombre(32)+paleta(768)+rangos(576)
+     fseek(f,1380L,SEEK_CUR);     // code(4)+name(32)+palette(768)+ranges(576)
      if((int)fread(&snp,2,1,f)!=1){s_cpy(m9_msg,"SKY npts err");div_fclose(f);return 0;}
      w=(int)sw;h=(int)sh;npoints=(int)snp;}
     if(w<=0||h<=0||w>SKY_MAXDIM*2||h>SKY_MAXDIM){s_cpy(m9_msg,"SKY size err");div_fclose(f);return 0;}
@@ -1310,27 +1310,27 @@ static int load_sky_file(char *fname){
     if((int)fread(sky_data,1,(size_t)pix_size,f)!=pix_size){
         s_cpy(m9_msg,"SKY read err");div_free(sky_data);sky_data=NULL;div_fclose(f);return 0;
     }
-    sky_w=w;sky_h=h;sky_on=1;sky_cd_vw=0;   // invalidar cache de columnas
+    sky_w=w;sky_h=h;sky_on=1;sky_cd_vw=0;   // invalidate column cache
     div_fclose(f);
     {char num[12];s_cpy(m9_msg,"SKY ");s_itos(w,num);s_cat(m9_msg,num);
      s_cat(m9_msg,"x");s_itos(h,num);s_cat(m9_msg,num);}
     return 1;
 }
 
-// LOAD_SKY9(map): carga un cielo panoramico .MAP. Sustituye el color de fondo
-// plano por la textura, orientada segun el yaw (giro) y pitch (mirar arriba/abajo).
+// LOAD_SKY9(map): loads a panoramic .MAP sky. Replaces the flat background color
+// with the texture, oriented by the yaw (turn) and pitch (look up/down).
 static void load_sky9_fn(void){
     int off=getparm(); char fname[64];
     div2c(off,fname,sizeof(fname));
     retval(load_sky_file(fname));
 }
-// SKY9_OFF(): vuelve al fondo de color plano (SET_ENV_COLOR9).
+// SKY9_OFF(): back to the flat color background (SET_ENV_COLOR9).
 static void sky9_off_fn(void){ sky_on=0; retval(0); }
 
-// MODE9_LOADFPG(fichero): carga un FPG en la DLL para dibujar los billboards
-// (procesos c_m9) ella misma en CADA viewport (necesario para split-screen).
-// Sin esto, los billboards usan la ruta c_screen de DIV2 (una sola vista).
-// Devuelve nº de graficos cargados. El PRG sigue haciendo su load_fpg aparte.
+// MODE9_LOADFPG(file): loads an FPG in the DLL to draw the billboards
+// (c_m9 processes) itself in EACH viewport (needed for split-screen).
+// Without this, billboards use DIV2's c_screen path (single view).
+// Returns num loaded graphics. The PRG still does its own load_fpg separately.
 static void mode9_loadfpg_fn(void){
     int str_off=getparm();
     char fname[64];
@@ -1341,30 +1341,30 @@ static void mode9_loadfpg_fn(void){
 // ============================================================================
 // START_MODE9 / STOP_MODE9 / MODE9_SET / MODE9_UNITSCALE
 // ============================================================================
-// START_MODE9(camera, m9, region): igual firma que start_mode8.
-//   camera : id del proceso camara (como start_mode8).
-//   m9     : el STRUCT m9 a usar. OJO: en modo 8 aqui va el INDICE de m8 (el
-//            motor sabe donde vive m8); aqui, al ser m9 un struct del PRG, se
-//            pasa su DIRECCION: &m9 (o &m9[n] si usas un array de camaras). La
-//            DLL lee m9.camera/height/angle de ahi cada frame (integra el BIND).
-//   region : region de pantalla, como en start_mode8.
-//            0 = PANTALLA COMPLETA: vista unica, desactiva el resto (clasico).
-//            n (1..15) = la region definida con MODE9_REGION(n,x,y,w,h): crea/
-//            actualiza una vista en ese rectangulo SIN tocar las demas regiones,
-//            de modo que puedes llamar START_MODE9 varias veces (una por region)
-//            para montar un split-screen al estilo "varias ventanas de modo 8".
-//            Si la region n no se definio aun, cae a pantalla completa.
+// START_MODE9(camera, m9, region): same signature as start_mode8.
+//   camera : id of the camera process (like start_mode8).
+//   m9     : the m9 STRUCT to use. NOTE: in mode 8 the m8 INDEX goes here (the
+//            engine knows where m8 lives); here, since m9 is a PRG struct, its
+//            ADDRESS is passed: &m9 (or &m9[n] if you use a camera array). The
+//            DLL reads m9.camera/height/angle from there each frame (integrates the BIND).
+//   region : screen region, as in start_mode8.
+//            0 = FULL SCREEN: single view, disables the rest (classic).
+//            n (1..15) = the region defined with MODE9_REGION(n,x,y,w,h): creates/
+//            updates a view in that rectangle WITHOUT touching the other regions,
+//            so you can call START_MODE9 several times (one per region)
+//            to set up a split-screen in the "several mode 8 windows" style.
+//            If region n isn't defined yet, it falls back to full screen.
 static void start_mode9_fn(void){
-    int region=getparm();    // 3er arg
-    int m9off =getparm();    // 2do arg: &m9
-    int cam   =getparm();    // 1er arg: id de la camara
+    int region=getparm();    // 3rd arg
+    int m9off =getparm();    // 2nd arg: &m9
+    int cam   =getparm();    // 1st arg: camera id
     int i,slot;
     m9_camera=cam;
-    if(m9off) m9_bind=m9off; // enlaza el struct (no hace falta MODE9_BIND aparte)
+    if(m9off) m9_bind=m9off; // binds the struct (no need for a separate MODE9_BIND)
     m9_region=region;
 
     if(region<=0 || region>=MAX_REGIONS || !reg_def[region]){
-        // --- Pantalla completa: vista unica (view 0), desactivar el resto -----
+        // --- Full screen: single view (view 0), disable the rest -----
         views[0].active=1; views[0].cam=cam; views[0].bind=m9off; views[0].region=0;
         views[0].vx=0; views[0].vy=0; views[0].vw=0; views[0].vh=0; views[0].haslast=0;
         for(i=1;i<MAX_VIEWS;i++) views[i].active=0;
@@ -1373,51 +1373,51 @@ static void start_mode9_fn(void){
         return;
     }
 
-    // --- Region con rectangulo: reusar el slot que ya servia esa region, o el
-    //     primer slot libre. No se tocan las demas vistas (split por regiones). --
+    // --- Region with rectangle: reuse the slot that already served that region, or the
+    //     first free slot. The other views aren't touched (split by regions). --
     slot=-1;
     for(i=0;i<MAX_VIEWS;i++) if(views[i].active && views[i].region==region){slot=i;break;}
     if(slot<0) for(i=0;i<MAX_VIEWS;i++) if(!views[i].active){slot=i;break;}
-    if(slot<0){ retval(0); return; }   // sin slots: no caben mas regiones
+    if(slot<0){ retval(0); return; }   // no slots: no room for more regions
     views[slot].active=1; views[slot].cam=cam; views[slot].bind=m9off; views[slot].region=region;
     views[slot].vx=reg_x[region]; views[slot].vy=reg_y[region];
     views[slot].vw=reg_w[region]; views[slot].vh=reg_h[region];
     views[slot].haslast=0;
-    // El slot 0 manda en la ruta c_screen de billboards (1 sola vista de DIV2).
+    // Slot 0 rules the c_screen billboard path (DIV2's single view).
     if(slot==0){ m9_camera=cam; if(m9off)m9_bind=m9off; }
     m9_active=1;
     retval(1);
 }
-// MODE9_SPLIT(slot, camara, m9, x, y, w, h): define un viewport (split-screen).
-// slot 0..MAX_VIEWS-1. Cada vista tiene su propia camara y su propio STRUCT m9
-// (&m9[n].z). x,y,w,h = rectangulo en pantalla (uds de pantalla). Llama varias
-// veces (una por jugador). Tambien activa el modo 9.
+// MODE9_SPLIT(slot, camera, m9, x, y, w, h): defines a viewport (split-screen).
+// slot 0..MAX_VIEWS-1. Each view has its own camera and its own m9 STRUCT
+// (&m9[n].z). x,y,w,h = rectangle on screen (screen units). Call several
+// times (one per player). Also activates mode 9.
 static void mode9_split_fn(void){
     int h=getparm(),w=getparm(),y=getparm(),x=getparm();
     int m9off=getparm(),cam=getparm(),slot=getparm();
     if(slot<0||slot>=MAX_VIEWS){retval(0);return;}
     views[slot].active=1; views[slot].cam=cam; views[slot].bind=m9off;
     views[slot].vx=x; views[slot].vy=y; views[slot].vw=w; views[slot].vh=h;
-    views[slot].haslast=0; views[slot].region=-1;   // rect explicito (no por numero)
-    if(slot==0){ m9_camera=cam; if(m9off)m9_bind=m9off; }  // primario (billboards)
+    views[slot].haslast=0; views[slot].region=-1;   // explicit rect (not by number)
+    if(slot==0){ m9_camera=cam; if(m9off)m9_bind=m9off; }  // primary (billboards)
     m9_active=1;
     retval(1);
 }
-// MODE9_COLLISION(on): 1=advance/xadvance no atraviesan paredes (usa el campo
-// radius del proceso camara como distancia minima a la pared), 0=libre.
-// Por defecto ON (1): llama con 0 solo si quieres atravesar paredes.
+// MODE9_COLLISION(on): 1=advance/xadvance don't go through walls (uses the
+// camera process's radius field as min distance to wall), 0=free.
+// ON by default (1): call with 0 only if you want to go through walls.
 static void mode9_collision_fn(void){
     m9_collision=getparm()?1:0;
     retval(0);
 }
-// MODE9_STEP(altura): altura MAXIMA de escalon/rampa (uds DIV2) que se sube de
-// forma automatica. >0 activa escaleras y rampas (floor-following): los muros mas
-// bajos que 'altura' no bloquean (se suben) y el jugador se apoya en el suelo que
-// tiene debajo (peldaños, rampas inclinadas hasta ~60). 0 = desactivado (clasico:
-// la DLL no toca z, el PRG controla la altura). Requiere MODE9_COLLISION(1).
-// IMPORTANTE: la GRAVEDAD la sigue aplicando el PRG (z = z - algo cada frame); la
-// DLL solo SUBE z cuando el jugador se apoya en un suelo/escalon. Llamar DESPUES
-// de LOAD_WLD9 (usa la escala de unidades fijada alli).
+// MODE9_STEP(height): MAX step/ramp height (DIV2 units) that is climbed
+// automatically. >0 enables stairs and ramps (floor-following): walls
+// lower than 'height' don't block (you climb them) and the player rests on the floor
+// below (steps, ramps inclined up to ~60). 0 = disabled (classic:
+// the DLL doesn't touch z, the PRG controls the height). Requires MODE9_COLLISION(1).
+// IMPORTANT: GRAVITY is still applied by the PRG (z = z - something each frame); the
+// DLL only RAISES z when the player rests on a floor/step. Call AFTER
+// LOAD_WLD9 (it uses the unit scale set there).
 static void mode9_step_fn(void){
     int d=getparm();
     m9_step=(d>0)?(float)d/m9_unitscale:0.0f;
@@ -1427,13 +1427,13 @@ static void stop_mode9_fn(void){
     m9_active=0;
     retval(0);
 }
-// MODE9_SCRW()/MODE9_SCRH(): ancho/alto de la pantalla actual (la DLL los conoce
-// por _wide/_height). Para que el PRG calcule limites de raton y viewports a
-// CUALQUIER resolucion sin hardcodear 320x200. Devuelven 320/200 si no hay modo.
+// MODE9_SCRW()/MODE9_SCRH(): width/height of the current screen (the DLL knows them
+// from _wide/_height). So the PRG can compute mouse and viewport limits at
+// ANY resolution without hardcoding 320x200. Return 320/200 if there's no mode.
 static void mode9_scrw_fn(void){ retval((_wide  && *_wide  >0)?*_wide  :320); }
 static void mode9_scrh_fn(void){ retval((_height&& *_height>0)?*_height:200); }
 static void mode9_set_fn(void){
-    m9_pitch=getparm();      // pitch (ultimo argumento)
+    m9_pitch=getparm();      // pitch (last argument)
     m9_height=getparm();     // height
     retval(0);
 }
@@ -1442,32 +1442,32 @@ static void mode9_unitscale_fn(void){
     if(n>0) m9_unitscale=(float)n;
     retval(0);
 }
-// MODE9_CULL(modo): 0=sin culling, 1=descarta caras traseras (def), 2=invertido.
-// Solo usar 1/2 con mallas de volumen cerrado y normales coherentes hacia fuera.
+// MODE9_CULL(mode): 0=no culling, 1=discards back faces (def), 2=inverted.
+// Only use 1/2 with closed-volume meshes and consistent outward normals.
 static void mode9_cull_fn(void){
     int m=getparm();
     if(m>=0&&m<=2) cull_mode=m;
     retval(0);
 }
-// MODE9_FOV(grados): campo de vision HORIZONTAL en grados (def ~71). Valores
-// tipicos: 60 (mas "tele"/zoom), 90 (amplio), 110 (ojo de pez). El valor por
-// defecto se mantiene si no se llama. Afecta a la proyeccion y al frustum culling
-// (no a los billboards de la ruta c_screen de DIV2, que no proyecta la DLL).
-//   focal = ancho * 0.5/tan(FOV/2). Se aplica a TODAS las vistas/viewports.
+// MODE9_FOV(degrees): HORIZONTAL field of view in degrees (def ~71). Typical
+// values: 60 (more "tele"/zoom), 90 (wide), 110 (fisheye). The default value
+// is kept if not called. Affects the projection and the frustum culling
+// (not the billboards of DIV2's c_screen path, which the DLL doesn't project).
+//   focal = width * 0.5/tan(FOV/2). Applies to ALL views/viewports.
 static void mode9_fov_fn(void){
     int deg=getparm();
     if(deg>=20&&deg<=150){
-        float r=(float)deg*(3.14159265f/180.0f)*0.5f;   // medio FOV en radianes
+        float r=(float)deg*(3.14159265f/180.0f)*0.5f;   // half FOV in radians
         float t=(float)tan((double)r);
         if(t>0.01f) m9_focal_k=0.5f/t;
     }
     retval(0);
 }
-// MODE9_REGION(n, x, y, w, h): define el rectangulo de la region n (1..15), igual
-// que define_region() de DIV2 pero para el modo 9 (la DLL no ve las regiones del
-// motor). Luego START_MODE9(cam, &m9, n) muestra esa camara dentro de la region.
-// La region 0 es siempre la pantalla completa y no se puede redefinir. Pasar w<=0
-// o h<=0 borra la region. Devuelve 1 si la registro, 0 si el numero no es valido.
+// MODE9_REGION(n, x, y, w, h): defines the rectangle of region n (1..15), like
+// DIV2's define_region() but for mode 9 (the DLL doesn't see the engine's
+// regions). Then START_MODE9(cam, &m9, n) shows that camera inside the region.
+// Region 0 is always the full screen and can't be redefined. Passing w<=0
+// or h<=0 clears the region. Returns 1 if registered, 0 if the number is invalid.
 static void mode9_region_fn(void){
     int h=getparm(),w=getparm(),y=getparm(),x=getparm(),n=getparm();
     if(n<1||n>=MAX_REGIONS){retval(0);return;}
@@ -1475,18 +1475,18 @@ static void mode9_region_fn(void){
     reg_x[n]=x; reg_y[n]=y; reg_w[n]=w; reg_h[n]=h; reg_def[n]=1;
     retval(1);
 }
-// MODE9_FARCLIP(dist): no dibujar mas alla de 'dist' (uds DIV2). Recorta los
-// poligonos del mundo, los modelos OBJ (por su origen) y los billboards (por su
-// distancia a camara). 0 = sin limite. Si hay niebla activa, ademas se recorta a
-// fog_far (lo que queda detras de la niebla es del color de fondo, no hace falta
-// dibujarlo).
+// MODE9_FARCLIP(dist): don't draw beyond 'dist' (DIV2 units). Clips the
+// world polygons, the OBJ models (by their origin) and the billboards (by their
+// distance to camera). 0 = no limit. If fog is active, it also clips at
+// fog_far (what's behind the fog is the background color, no need to
+// draw it).
 static void mode9_farclip_fn(void){
     int d=getparm();
     far_clip=(d>0)?(float)d/m9_unitscale:0.0f;
     retval(0);
 }
-// MODE9_BIND(&m9): enlaza el STRUCT m9 del PRG (campos z,camera,height,angle).
-// La DLL lee camera/height/angle de el cada frame, evitando llamar a MODE9_SET.
+// MODE9_BIND(&m9): binds the PRG's m9 STRUCT (fields z,camera,height,angle).
+// The DLL reads camera/height/angle from it each frame, avoiding MODE9_SET calls.
 static void mode9_bind_fn(void){
     m9_bind=getparm();
     retval(0);
@@ -1495,37 +1495,37 @@ static void mode9_bind_fn(void){
 // ============================================================================
 // SET_ENV_COLOR9 / SET_FOG9 / MODE9_FOG_OFF
 // ============================================================================
-// DIV2 usa rango 0..100 por canal; la paleta VGA es de 6 bits (0..63). Se
-// escala: 100 -> 63 (blanco). (Antes se escribia el valor crudo en la paleta,
-// por eso 100 o 255 no daban blanco: se salian del rango de 6 bits.)
+// DIV2 uses range 0..100 per channel; the VGA palette is 6-bit (0..63). It's
+// scaled: 100 -> 63 (white). (It used to write the raw value into the palette,
+// which is why 100 or 255 didn't give white: they overflowed the 6-bit range.)
 static int col100to63(int v){
     if(v<0)v=0; if(v>100)v=100;
     return (v*63+50)/100;
 }
 static void set_env_color9_fn(void){
-    int b=getparm(),g=getparm(),r=getparm();   // 0..100 por canal
+    int b=getparm(),g=getparm(),r=getparm();   // 0..100 per channel
     env_r=col100to63(r); env_g=col100to63(g); env_b=col100to63(b);
     palette[PAL_ENV*3+0]=(char)env_r;
     palette[PAL_ENV*3+1]=(char)env_g;
     palette[PAL_ENV*3+2]=(char)env_b;
     set_palette=1;
-    // Si la niebla esta activa, su color = color de ambiente: reconstruirla.
+    // If fog is active, its color = ambient color: rebuild it.
     if(fog_on) build_fog_map(env_r,env_g,env_b);
     retval(0);
 }
-// SET_FOG9(near, far): niebla por distancia, como set_fog del modo 8. La niebla
-// crece LINEALMENTE con la distancia: transparente hasta 'near', y completamente
-// opaca (color de ambiente) en 'far'. El COLOR es el de SET_ENV_COLOR9.
-// DIFERENCIA con el modo 8: alli near/far son 0..100 (porcentaje); aqui son
-// DISTANCIAS ABSOLUTAS en uds DIV2 (mas precisas), p.ej. SET_FOG9(300,1400).
-// Como en el modo 8, lo habitual es far ~ 2*near.
+// SET_FOG9(near, far): distance fog, like mode 8's set_fog. The fog
+// grows LINEARLY with distance: transparent up to 'near', and fully
+// opaque (ambient color) at 'far'. The COLOR is that of SET_ENV_COLOR9.
+// DIFFERENCE from mode 8: there near/far are 0..100 (percentage); here they are
+// ABSOLUTE DISTANCES in DIV2 units (more precise), e.g. SET_FOG9(300,1400).
+// As in mode 8, far ~ 2*near is usual.
 static void set_fog9_fn(void){
-    int ffar=getparm(),fnear=getparm();    // rango en uds DIV2
+    int ffar=getparm(),fnear=getparm();    // range in DIV2 units
     fog_near=(float)fnear/m9_unitscale;
     fog_far =(float)ffar /m9_unitscale;
-    build_fog_map(env_r,env_g,env_b);      // color de niebla = color de ambiente
+    build_fog_map(env_r,env_g,env_b);      // fog color = ambient color
     fog_on=(fog_map!=NULL && fog_far>fog_near);
-    // Pendiente niveles/unidad: nivel = (depth-fog_near)*fog_scale (ver fog_level).
+    // Levels/unit slope: level = (depth-fog_near)*fog_scale (see fog_level).
     fog_scale=(fog_far>fog_near)?((float)(FOG_LEVELS-1)/(fog_far-fog_near)):0.0f;
     retval(0);
 }
@@ -1535,14 +1535,14 @@ static void mode9_fog_off_fn(void){
 }
 
 // ============================================================================
-// Lee la camara (proceso) y rellena posicion/orientacion. Devuelve 1 si OK.
+// Reads the camera (process) and fills position/orientation. Returns 1 if OK.
 // ============================================================================
 static int get_camera(int cam,int bind,
                       float *cx,float *cy,float *cz,float *yaw,float *pitch,
                       int *outbase){
     int eyeh=m9_height, pitch_i=m9_pitch, base;
-    // Si hay STRUCT m9 enlazado, leer camera/height/angle de el (campos
-    // consecutivos: z=+0, camera=+1, height=+2, angle=+3). Evita MODE9_SET.
+    // If there's a bound m9 STRUCT, read camera/height/angle from it (consecutive
+    // fields: z=+0, camera=+1, height=+2, angle=+3). Avoids MODE9_SET.
     if(bind){
         cam     =mem[bind+1];
         eyeh    =mem[bind+2];
@@ -1552,19 +1552,19 @@ static int get_camera(int cam,int bind,
     if(outbase)*outbase=base;
     if(base<0) return 0;
     *cx   =(float)mem[base+P_X]/m9_unitscale;
-    *cz   =(float)mem[base+P_Y]/m9_unitscale;     // proceso.y -> mundo Z
-    *cy   =(float)(mem[base+P_Z]+eyeh)/m9_unitscale;   // altura del ojo
+    *cz   =(float)mem[base+P_Y]/m9_unitscale;     // process.y -> world Z
+    *cy   =(float)(mem[base+P_Z]+eyeh)/m9_unitscale;   // eye height
     *yaw  =(float)mem[base+P_ANGLE]*(3.14159265f/180000.0f);
     *pitch=(float)pitch_i*(3.14159265f/180000.0f);
     return 1;
 }
 
 // ============================================================================
-// floor_height: altura del suelo bajo el punto (px,pz) en uds OBJ. Recorre los
-// triangulos de suelo, hace el test punto-en-triangulo en XZ (coordenadas
-// baricentricas) e interpola la Y del plano. Devuelve el suelo MAS ALTO cuya
-// altura no supere ceil_y (asi en un edificio de 2 plantas no te sube al techo).
-// Devuelve 1 y escribe *fy si encuentra suelo; 0 si no hay suelo bajo el punto.
+// floor_height: floor height under the point (px,pz) in OBJ units. Walks the
+// floor triangles, does the point-in-triangle test in XZ (barycentric
+// coordinates) and interpolates the plane's Y. Returns the HIGHEST floor whose
+// height doesn't exceed ceil_y (so in a 2-story building it doesn't raise you to the ceiling).
+// Returns 1 and writes *fy if it finds a floor; 0 if there's no floor under the point.
 // ============================================================================
 static int floor_height(float px,float pz,float ceil_y,float *fy){
     int i,found=0; float best=-1e30f;
@@ -1574,14 +1574,14 @@ static int floor_height(float px,float pz,float ceil_y,float *fy){
         float x0=mesh_v[a].x,z0=mesh_v[a].z,y0=mesh_v[a].y;
         float x1=mesh_v[b].x,z1=mesh_v[b].z,y1=mesh_v[b].y;
         float x2=mesh_v[c].x,z2=mesh_v[c].z,y2=mesh_v[c].y;
-        float d=(z1-z2)*(x0-x2)+(x2-x1)*(z0-z2);    // 2*area en XZ (≠0 = no vertical)
+        float d=(z1-z2)*(x0-x2)+(x2-x1)*(z0-z2);    // 2*area in XZ (!=0 = not vertical)
         float l0,l1,l2,y,inv;
         if(d<1e-6f&&d>-1e-6f)continue;
         inv=1.0f/d;
         l0=((z1-z2)*(px-x2)+(x2-x1)*(pz-z2))*inv;
         l1=((z2-z0)*(px-x2)+(x0-x2)*(pz-z2))*inv;
         l2=1.0f-l0-l1;
-        if(l0<-0.001f||l1<-0.001f||l2<-0.001f)continue;   // (px,pz) fuera del triangulo
+        if(l0<-0.001f||l1<-0.001f||l2<-0.001f)continue;   // (px,pz) outside the triangle
         y=l0*y0+l1*y1+l2*y2;
         if(y<=ceil_y+0.05f && y>best){best=y;found=1;}
     }
@@ -1590,45 +1590,45 @@ static int floor_height(float px,float pz,float ceil_y,float *fy){
 }
 
 // ============================================================================
-// Colision 2D (plano XZ) de un circulo (camara, radio r en uds OBJ) contra los
-// segmentos de pared. Empuja la camara fuera de las paredes que coincidan con
-// su altura (sliding: solo se corrige la componente perpendicular, asi se
-// "desliza" a lo largo de la pared). Modifica *cx,*cz. Las paredes cuya cima
-// este a <= 'step' sobre los pies (feet) NO bloquean: son escalones que el
-// floor-follow sube (asi se puede entrar en una escalera).
+// 2D collision (XZ plane) of a circle (camera, radius r in OBJ units) against the
+// wall segments. Pushes the camera out of the walls that overlap with
+// its height (sliding: only the perpendicular component is corrected, so it
+// "slides" along the wall). Modifies *cx,*cz. Walls whose top is
+// <= 'step' above the feet do NOT block: they're steps the
+// floor-follow climbs (so you can enter a staircase).
 // ============================================================================
 static void collide_xz(float *cx,float *cz,float cy,float r,float feet,float step){
-    float ylo=cy-PLAYER_BODY, yhi=cy+0.3f;   // franja vertical del jugador (OBJ)
-    float r2=r*r, reach=r*2.0f+0.01f;        // alcance: cubre las 2 pasadas + empuje
+    float ylo=cy-PLAYER_BODY, yhi=cy+0.3f;   // player's vertical strip (OBJ)
+    float r2=r*r, reach=r*2.0f+0.01f;        // reach: covers the 2 passes + push
     int pass,wi;
-    // Solo prueba las paredes cercanas (rejilla). reach=2r garantiza incluir toda
-    // pared a <=r del jugador tras los empujes de ambas pasadas (ver gather_walls).
+    // Only tests the nearby walls (grid). reach=2r guarantees including every
+    // wall within <=r of the player after both passes' pushes (see gather_walls).
     gather_walls(*cx-reach,*cz-reach,*cx+reach,*cz+reach);
-    for(pass=0;pass<2;pass++){               // 2 pasadas: resuelve esquinas
+    for(pass=0;pass<2;pass++){               // 2 passes: resolves corners
         for(wi=0;wi<n_wcand;wi++){
             int w=wcand[wi];
             float ax,az,bx,bz,dx,dz,len2,t,px,pz,ox,oz,d2;
             int atEnd;
             if(mesh_walls[w].ymax<ylo || mesh_walls[w].ymin>yhi) continue;
-            if(step>0.0f && mesh_walls[w].ymax<=feet+step) continue;  // escalon: no bloquea
+            if(step>0.0f && mesh_walls[w].ymax<=feet+step) continue;  // step: doesn't block
             ax=mesh_walls[w].x0; az=mesh_walls[w].z0;
             bx=mesh_walls[w].x1; bz=mesh_walls[w].z1;
             dx=bx-ax; dz=bz-az; len2=dx*dx+dz*dz;
             t = (len2>1e-9f) ? (((*cx-ax)*dx+(*cz-az)*dz)/len2) : 0.0f;
             atEnd=0;
             if(t<0.0f){t=0.0f; atEnd=1;} else if(t>1.0f){t=1.0f; atEnd=2;}
-            // El punto mas cercano cae en un EXTREMO (tapa radial). Si ese extremo
-            // es un vertice interior (cap=0), saltar: la pared contigua ya frena y
-            // asi no se atora en juntas/esquinas (ver M9_CORNER_SLIDE).
+            // The nearest point falls on an END (radial cap). If that end
+            // is an interior vertex (cap=0), skip it: the adjacent wall already stops you and
+            // this way you don't snag at joints/corners (see M9_CORNER_SLIDE).
             if(atEnd==1 && !mesh_walls[w].cap0) continue;
             if(atEnd==2 && !mesh_walls[w].cap1) continue;
-            px=ax+dx*t; pz=az+dz*t;          // punto mas cercano del segmento
+            px=ax+dx*t; pz=az+dz*t;          // nearest point of the segment
             ox=*cx-px; oz=*cz-pz; d2=ox*ox+oz*oz;
             if(d2<r2){
                 if(d2>1e-10f){
                     float inv=fast_rsqrt(d2); float push=(r-1.0f/inv)*inv;
                     *cx+=ox*push; *cz+=oz*push;
-                } else {                      // justo encima: empujar por la normal
+                } else {                      // right above: push along the normal
                     float nx=-dz, nz2=dx, nl2=nx*nx+nz2*nz2;
                     if(nl2>1e-10f){ float inv=fast_rsqrt(nl2); *cx+=nx*inv*r; *cz+=nz2*inv*r; }
                 }
@@ -1637,41 +1637,41 @@ static void collide_xz(float *cx,float *cz,float cy,float r,float feet,float ste
     }
 }
 
-// Colision con BARRIDO (swept): evita el "tunneling" cuando la camara se mueve
-// mas rapido que su radio. Si el segmento de movimiento (lx,lz)->(cx,cz) cruza
-// el plano de una pared a distancia < r, detiene la camara a distancia r del
-// plano por el lado del que venia. collide_xz refina luego el deslizamiento.
+// SWEPT collision: avoids "tunneling" when the camera moves
+// faster than its radius. If the movement segment (lx,lz)->(cx,cz) crosses
+// a wall's plane at distance < r, it stops the camera at distance r from the
+// plane on the side it came from. collide_xz then refines the sliding.
 static void collide_swept(float lx,float lz,float *cx,float *cz,float cy,float r,
                           float feet,float step){
     float ylo=cy-PLAYER_BODY, yhi=cy+0.3f;
-    float mnx=lx<*cx?lx:*cx, mxx=lx>*cx?lx:*cx;     // AABB del segmento de movimiento
+    float mnx=lx<*cx?lx:*cx, mxx=lx>*cx?lx:*cx;     // AABB of the movement segment
     float mnz=lz<*cz?lz:*cz, mxz=lz>*cz?lz:*cz;
     float m=r+0.01f;
     int wi;
-    gather_walls(mnx-m,mnz-m,mxx+m,mxz+m);          // solo paredes que cruza el barrido
+    gather_walls(mnx-m,mnz-m,mxx+m,mxz+m);          // only walls the sweep crosses
     for(wi=0;wi<n_wcand;wi++){
         int w=wcand[wi];
         float ax,az,ex,ez,el2,nx,nz,nl,dl,dc,t,ix,iz,st,target,denom;
         if(mesh_walls[w].ymax<ylo||mesh_walls[w].ymin>yhi)continue;
-        if(step>0.0f && mesh_walls[w].ymax<=feet+step)continue;   // escalon: no bloquea
+        if(step>0.0f && mesh_walls[w].ymax<=feet+step)continue;   // step: doesn't block
         ax=mesh_walls[w].x0; az=mesh_walls[w].z0;
         ex=mesh_walls[w].x1-ax; ez=mesh_walls[w].z1-az; el2=ex*ex+ez*ez;
         if(el2<1e-9f)continue;
         nx=-ez; nz=ex; {float nl2=nx*nx+nz*nz; if(nl2<1e-12f)continue;
         {float inv=fast_rsqrt(nl2); nx*=inv; nz*=inv;}}
-        dl=(lx-ax)*nx+(lz-az)*nz;        // distancia perpendicular del origen
-        dc=(*cx-ax)*nx+(*cz-az)*nz;      // distancia perpendicular del destino
-        // ¿cruza la "banda" de radio r del plano viniendo de fuera?
+        dl=(lx-ax)*nx+(lz-az)*nz;        // perpendicular distance of the origin
+        dc=(*cx-ax)*nx+(*cz-az)*nz;      // perpendicular distance of the destination
+        // does it cross the radius-r "band" of the plane coming from outside?
         if(dl>=r && dc<r)      target= r;
         else if(dl<=-r && dc>-r) target=-r;
         else continue;
         denom=dl-dc; if(denom>-1e-6f&&denom<1e-6f)continue;
         t=(dl-target)/denom; if(t<0.0f)t=0.0f; else if(t>1.0f)t=1.0f;
         ix=lx+(*cx-lx)*t; iz=lz+(*cz-lz)*t;
-        st=((ix-ax)*ex+(iz-az)*ez)/el2;  // ¿el cruce cae dentro del segmento?
-        // Dentro del segmento: frena siempre. Mas alla de un extremo: solo si ese
-        // extremo es una esquina REAL (cap=1); si es interior (junta/jamba, cap=0)
-        // no frena, para no crear falsos bloqueos en los bordes del porton.
+        st=((ix-ax)*ex+(iz-az)*ez)/el2;  // does the crossing fall inside the segment?
+        // Inside the segment: always stop. Beyond an end: only if that
+        // end is a REAL corner (cap=1); if it's interior (joint/jamb, cap=0)
+        // it doesn't stop, to avoid false blocks at the gate edges.
         {
             int ok;
             if(st>=0.0f&&st<=1.0f) ok=1;
@@ -1683,12 +1683,12 @@ static void collide_swept(float lx,float lz,float *cx,float *cz,float cy,float r
 }
 
 // ============================================================================
-// MODE9_COLLIDE(pid): empuja un proceso CUALQUIERA fuera de las paredes (sliding),
-// no solo la camara. Lee su x,y (suelo), z (altura) y radius del proceso; corrige
-// x,y y los reescribe. Devuelve 1 si lo movio (estaba dentro de un muro), 0 si no.
-// Es deslizamiento puro (sin barrido anti-tunneling): pensado para NPCs a
-// velocidad normal; para algo muy rapido, llamalo varias veces o reduce su paso.
-// Se trata z (P_Z) como la altura de los PIES; el cuerpo sube PLAYER_BODY.
+// MODE9_COLLIDE(pid): pushes ANY process out of the walls (sliding),
+// not just the camera. Reads its x,y (ground), z (height) and the process's radius; corrects
+// x,y and rewrites them. Returns 1 if it moved it (it was inside a wall), 0 if not.
+// It's pure sliding (no anti-tunneling sweep): meant for NPCs at
+// normal speed; for something very fast, call it several times or reduce its step.
+// z (P_Z) is treated as the FEET height; the body rises PLAYER_BODY.
 // ============================================================================
 static void mode9_collide_fn(void){
     int pid=getparm();
@@ -1697,14 +1697,14 @@ static void mode9_collide_fn(void){
     if(base<0 || n_walls<=0){ retval(0); return; }
     cx=(float)mem[base+P_X]/m9_unitscale;
     cz=(float)mem[base+P_Y]/m9_unitscale;
-    cy=(float)mem[base+P_Z]/m9_unitscale + PLAYER_BODY;   // banda vertical del cuerpo
+    cy=(float)mem[base+P_Z]/m9_unitscale + PLAYER_BODY;   // vertical band of the body
     r =(float)mem[base+P_RADIUS]/m9_unitscale;
     if(r<=0.0f) r=(float)COLLIDE_DEF/m9_unitscale;
     ox=cx; oz=cz;
     {
         float feet=(float)mem[base+P_Z]/m9_unitscale;
         collide_xz(&cx,&cz,cy,r,feet,m9_step);
-        // Escalones/rampas: subir los pies del proceso al suelo bajo el (<= m9_step).
+        // Steps/ramps: raise the process's feet to the floor below it (<= m9_step).
         if(m9_step>0.0f && n_floors>0){
             float fy;
             if(floor_height(cx,cz,feet+m9_step,&fy) && feet<fy){
@@ -1720,16 +1720,16 @@ static void mode9_collide_fn(void){
 }
 
 // ============================================================================
-// Sprites de billboards: parseo de FPG + dibujo (blit) escalado con oclusion.
+// Billboard sprites: FPG parsing + scaled draw (blit) with occlusion.
 // ============================================================================
 static void free_sprites(void){
     int i;
     for(i=0;i<n_fpgspr;i++){ if(fspr[i].pix){div_free(fspr[i].pix);fspr[i].pix=NULL;} }
     n_fpgspr=0;
 }
-// load_fpg_file: parsea un .FPG de DIV2 (formato FPGHEADER/FPGBODY de div.h) y
-// guarda cada grafico (codigo, w, h, punto de control, pixels). Devuelve nº de
-// graficos. Habilita el dibujo de billboards por la DLL (multi-vista).
+// load_fpg_file: parses a DIV2 .FPG (FPGHEADER/FPGBODY format from div.h) and
+// stores each graphic (code, w, h, control point, pixels). Returns num
+// graphics. Enables billboard drawing by the DLL (multi-view).
 static int load_fpg_file(char *fname){
     FILE *f; char magic[8]; int count=0;
     free_sprites();
@@ -1738,7 +1738,7 @@ static int load_fpg_file(char *fname){
     if((int)fread(magic,1,8,f)!=8||magic[0]!='f'||magic[1]!='p'||magic[2]!='g'){
         s_cpy(m9_msg,"FPG bad");div_fclose(f);return 0;
     }
-    fseek(f,768L+576L,SEEK_CUR);          // saltar paleta(768)+colorbars(16*36)
+    fseek(f,768L+576L,SEEK_CUR);          // skip palette(768)+colorbars(16*36)
     while(n_fpgspr<MAX_FPGSPR){
         int code,length,wide,height,npoints,psz,cx,cy;
         char desc[32],fn2[12];
@@ -1772,12 +1772,12 @@ static int load_fpg_file(char *fname){
 static int find_sprite(int code){
     int i; for(i=0;i<n_fpgspr;i++) if(fspr[i].code==code) return i; return -1;
 }
-// Dibuja el sprite 'idx' centrado en su punto de control en (scx,scy) de
-// pantalla, escalado a sizepct%, recortado al viewport (clip_*), con color 0
-// transparente y test/escritura de z-buffer (zfix) para oclusion por pixel.
-// fogmap: remapeo de color de niebla para ESTE sprite (segun su distancia), o
-// NULL si no hay niebla. Se aplica al pixel antes de escribirlo (igual que la
-// geometria), asi los billboards lejanos se funden con la niebla en vez de saltar.
+// Draws sprite 'idx' centered on its control point at (scx,scy) of
+// screen, scaled to sizepct%, clipped to the viewport (clip_*), with color 0
+// transparent and z-buffer test/write (zfix) for per-pixel occlusion.
+// fogmap: fog color remap for THIS sprite (by its distance), or
+// NULL if there's no fog. Applied to the pixel before writing it (like the
+// geometry), so distant billboards blend with the fog instead of popping.
 static void blit_sprite(int idx,int scx,int scy,int sizepct,int zfix,char *vid,int W,char *fogmap){
     FpgSpr *s=&fspr[idx];
     int dw=s->w*sizepct/100, dh=s->h*sizepct/100;
@@ -1813,27 +1813,27 @@ static void blit_sprite(int idx,int scx,int scy,int sizepct,int zfix,char *vid,i
     }
 }
 
-// Transforma un punto de mundo (uds OBJ) a espacio camara. Devuelve cx,cy,cz.
+// Transforms a world point (OBJ units) to camera space. Returns cx,cy,cz.
 static void world_to_cam(float Px,float Py,float Pz,
                          float Cx,float Cy,float Cz,
                          float ysin,float ycos,float psin,float pcos,
                          float *ocx,float *ocy,float *ocz){
     float dx=Px-Cx, dy=Py-Cy, dz=Pz-Cz;
-    // Yaw alrededor de Y. Eje X de camara = F x up (handedness igual que el
-    // modo 8: el giro horizontal NO queda espejado).
+    // Yaw around Y. Camera X axis = F x up (same handedness as
+    // mode 8: the horizontal turn is NOT mirrored).
     float rx = dx*ysin + dz*ycos;
     float rz = dx*ycos + dz*(-ysin);
     float ry = dy;
-    // Pitch alrededor del eje X de camara
+    // Pitch around the camera's X axis
     float y2 = ry*pcos - rz*psin;
     float z2 = ry*psin + rz*pcos;
     *ocx=rx; *ocy=y2; *ocz=z2;
 }
 
 // ============================================================================
-// do_render: nucleo del modo 9 (camara primera persona + recorte near + niebla)
+// do_render: core of mode 9 (first-person camera + near clip + fog)
 // ============================================================================
-// Color de flat-shading de un triangulo (normal en uds OBJ contra la luz).
+// Flat-shading color of a triangle (normal in OBJ units against the light).
 static unsigned char flat_color(int a,int b,int c){
     float ex1=mesh_v[b].x-mesh_v[a].x,ey1=mesh_v[b].y-mesh_v[a].y,ez1=mesh_v[b].z-mesh_v[a].z;
     float ex2=mesh_v[c].x-mesh_v[a].x,ey2=mesh_v[c].y-mesh_v[a].y,ez2=mesh_v[c].z-mesh_v[a].z;
@@ -1849,9 +1849,9 @@ static unsigned char flat_color(int a,int b,int c){
     return (unsigned char)(PAL_BASE+ci);
 }
 
-// flat_color_v: igual que flat_color pero recibe V3* en vez de indices globales.
-// Usada por load_obj9_model para precalcular el color de flat-shading de cada
-// triangulo del modelo (la normal del tri contra la misma luz que el mundo).
+// flat_color_v: like flat_color but receives V3* instead of global indices.
+// Used by load_obj9_model to precompute each triangle's flat-shading color
+// model triangle (the tri's normal against the same light as the world).
 static unsigned char flat_color_v(V3 *va,V3 *vb,V3 *vc){
     float ex1=vb->x-va->x,ey1=vb->y-va->y,ez1=vb->z-va->z;
     float ex2=vc->x-va->x,ey2=vc->y-va->y,ez2=vc->z-va->z;
@@ -1867,8 +1867,8 @@ static unsigned char flat_color_v(V3 *va,V3 *vb,V3 *vc){
     return (unsigned char)(PAL_BASE+ci);
 }
 
-// build_frame_name: construye "<base><n>.OBJ" (ej. base="CAT",n=3 -> "CAT3.OBJ").
-// Soporta n multidigito por si en el futuro se usan >10 fotogramas.
+// build_frame_name: builds "<base><n>.OBJ" (e.g. base="CAT",n=3 -> "CAT3.OBJ").
+// Supports multi-digit n in case >10 frames are used in the future.
 static void build_frame_name(char *dst,const char *base,int n){
     char tmp[12]; int k=0;
     strcpy(dst,base);
@@ -1881,9 +1881,9 @@ static void build_frame_name(char *dst,const char *base,int n){
     strcat(dst,".OBJ");
 }
 
-// load_obj9_verts_only: parsea SOLO las posiciones 'v' de un OBJ en dst (escaladas
-// por sfac). Para fotogramas de animacion >0, que comparten topologia (vt/f) con
-// el frame 0. Devuelve el numero de vertices leidos.
+// load_obj9_verts_only: parses ONLY the 'v' positions of an OBJ into dst (scaled
+// by sfac). For animation frames >0, which share topology (vt/f) with
+// frame 0. Returns the number of vertices read.
 static int load_obj9_verts_only(char *fname,V3 *dst,int maxv,float sfac){
     FILE *f; int nv=0; char line[256];
     f=div_fopen(fname,"r");
@@ -1901,9 +1901,9 @@ static int load_obj9_verts_only(char *fname,V3 *dst,int maxv,float sfac){
     return nv;
 }
 
-// load_obj9_model: parsea un OBJ en un Obj9Model. sfac = factor de escala
-// (model_unitscale / m9_unitscale) para convertir verts OBJ -> espacio mundo.
-// Usa div_malloc para los temporales y para las arrays finales del modelo.
+// load_obj9_model: parses an OBJ into an Obj9Model. sfac = scale factor
+// (model_unitscale / m9_unitscale) to convert OBJ verts -> world space.
+// Uses div_malloc for the temporaries and for the model's final arrays.
 static int load_obj9_model(Obj9Model *mdl,char *fname,float sfac){
     FILE *f;
     V3    *tv;
@@ -1968,14 +1968,14 @@ static int load_obj9_model(Obj9Model *mdl,char *fname,float sfac){
     for(i=0;i<nuv;i++)mdl->uvs[i]  =tuv[i];
     for(i=0;i<nt;i++) mdl->tris[i] =ttr[i];
     mdl->nv=nv;mdl->nuv=(has_uv?nuv:0);mdl->nt=nt;
-    mdl->vframes=mdl->verts;mdl->nframes=1;   // estatico por defecto
+    mdl->vframes=mdl->verts;mdl->nframes=1;   // static by default
     div_free(tv);div_free(tuv);div_free(ttr);
     return nt;
 }
 
-// Transforma y proyecta un vertice a espacio camara SOLO si no se hizo ya en este
-// frame (vstamp). Usa los parametros de camara de la vista actual (g_*). Rellena
-// camv/psx/psy/pbehind como antes hacia el bucle que recorria todos los vertices.
+// Transforms and projects a vertex to camera space ONLY if not already done this
+// frame (vstamp). Uses the camera params of the current view (g_*). Fills
+// camv/psx/psy/pbehind as before, for the loop that scanned all vertices.
 static void xform_vertex(int i){
     float dx,dy,dz,rx,rz,ocx,ocy,ocz;
     if(vstamp[i]==frame_stamp) return;
@@ -1990,15 +1990,15 @@ static void xform_vertex(int i){
     if(ocz>=NEAR_PLANE){
         float inv=fast_recip(ocz);
         float fx=g_hw+ocx*g_focal*inv, fy=g_hh-ocy*g_focal*inv;
-        psxf[i]=fx; psyf[i]=fy;                 // subpixel (para el rasterizado)
-        psx[i]=fast_ftol(fx); psy[i]=fast_ftol(fy); // entero (para culling)
+        psxf[i]=fx; psyf[i]=fy;                 // subpixel (for the rasterizing)
+        psx[i]=fast_ftol(fx); psy[i]=fast_ftol(fy); // integer (for culling)
         pbehind[i]=0;
     } else pbehind[i]=1;
 }
 
-// Criba de un triangulo (near cull + far clip + backface + frustum) y, si pasa,
-// lo añade a tsort[] para el bucket sort. Transforma sus vertices de forma
-// perezosa (xform_vertex). Comun a la ruta de rejilla y al fallback.
+// Culls a triangle (near cull + far clip + backface + frustum) and, if it passes,
+// adds it to tsort[] for the bucket sort. Transforms its vertices
+// lazily (xform_vertex). Common to the grid path and the fallback.
 static void consider_tri(int i,float fcull,int *pndraw){
     int a=mesh_t[i].a,b=mesh_t[i].b,c=mesh_t[i].c;
     float za,zb,zc,depth,zmin; int nd;
@@ -2011,23 +2011,23 @@ static void consider_tri(int i,float fcull,int *pndraw){
     }
     nd=*pndraw;
     if(!pbehind[a]&&!pbehind[b]&&!pbehind[c]){
-        // Triangulo entero delante del near: usar la proyeccion ya hecha.
+        // Whole triangle in front of the near: use the projection already done.
         int ax=psx[a],ay=psy[a],bx=psx[b],by=psy[b],cx2=psx[c],cy2=psy[c];
         if(cull_mode){
             long area=(long)(bx-ax)*(long)(cy2-ay)-(long)(cx2-ax)*(long)(by-ay);
-            if(cull_mode==1&&area>=0)return;   // descartar caras traseras
-            if(cull_mode==2&&area<=0)return;   // (winding invertido)
+            if(cull_mode==1&&area>=0)return;   // discard back faces
+            if(cull_mode==2&&area<=0)return;   // (inverted winding)
         }
-        {   // frustum (rect del viewport): los 3 fuera por el mismo lado
+        {   // frustum (viewport rect): all 3 outside on the same side
             int o0=0,o1=0,o2=0;
             if(ax<clip_x0)o0|=1; else if(ax>=clip_x1)o0|=2; if(ay<clip_y0)o0|=4; else if(ay>=clip_y1)o0|=8;
             if(bx<clip_x0)o1|=1; else if(bx>=clip_x1)o1|=2; if(by<clip_y0)o1|=4; else if(by>=clip_y1)o1|=8;
             if(cx2<clip_x0)o2|=1;else if(cx2>=clip_x1)o2|=2;if(cy2<clip_y0)o2|=4;else if(cy2>=clip_y1)o2|=8;
             if(o0&o1&o2)return;
         }
-        tsort[nd].ci=0;   // no necesita recorte
+        tsort[nd].ci=0;   // doesn't need clipping
     } else {
-        tsort[nd].ci=1;   // cruza el near: recorte en el rasterizado
+        tsort[nd].ci=1;   // crosses the near: clip during rasterizing
     }
     depth=(za+zb+zc)*(1.0f/3.0f);
     tsort[nd].depth=depth;
@@ -2036,29 +2036,29 @@ static void consider_tri(int i,float fcull,int *pndraw){
 }
 
 // ============================================================================
-// render_sky: rellena el fondo del viewport con el cielo panoramico cilindrico,
-// tratado como geometria infinitamente lejana: cada pixel depende SOLO de la
-// direccion del rayo (azimut/elevacion), no de la posicion. Asi queda "clavado"
-// al mundo y se mueve de forma natural al girar (yaw) y mirar arriba/abajo (pitch).
-//   azimut(x)    = -yaw + atan((x-cx)/focal)          -> columna de textura (envuelve 360)
-//   elevacion(y) =  pitch + atan((cy-y)/focal)        -> fila de textura
-// Ambos ejes usan la MISMA escala px-textura/radian (sky_w/2pi) para no deformar.
-// Se dibuja SIN z-buffer (la geometria se rasteriza encima). Respeta el 'step'
-// del line doubler. El signo de 'base' coincide con la handedness del motor
-// (rz=dx*cos-dz*sin); si el cielo girara al reves, cambia -yaw por +yaw.
+// render_sky: fills the viewport background with the cylindrical panoramic sky,
+// treated as infinitely-distant geometry: each pixel depends ONLY on the
+// ray direction (azimuth/elevation), not on position. So it stays "pinned"
+// to the world and moves naturally when turning (yaw) and looking up/down (pitch).
+//   azimuth(x)    = -yaw + atan((x-cx)/focal)          -> texture column (wraps 360)
+//   elevation(y) =  pitch + atan((cy-y)/focal)         -> texture row
+// Both axes use the SAME px-texture/radian scale (sky_w/2pi) to not distort.
+// Drawn WITHOUT z-buffer (the geometry is rasterized on top). Respects the line
+// doubler 'step'. The sign of 'base' matches the engine's handedness
+// (rz=dx*cos-dz*sin); if the sky turned the wrong way, swap -yaw for +yaw.
 // ============================================================================
 static void render_sky(int vx,int vy,int vw,int vh,float focal,float hh,
                        float yaw,float pitch,char *vid,int W,int step){
     static int   skycol[SKY_MAXDIM];
     static int   skyrow[SKY_MAXDIM];
-    static int   skyhz[SKY_MAXDIM];      // nivel de niebla/bruma por fila (si hay niebla)
-    static float rowang[SKY_MAXDIM];     // atan((centro-y)/focal) por fila de pantalla
+    static int   skyhz[SKY_MAXDIM];      // fog/haze level per row (if there's fog)
+    static float rowang[SKY_MAXDIM];     // atan((center-y)/focal) per screen row
     int x,y,base, dofog=(fog_on&&fog_map!=NULL);
-    float k=(float)sky_w/6.2831853f;     // px de textura por radian (igual en H y V)
-    float hazespan=0.35f;                // rad (~20): bajo esta elevacion el cielo se funde con la niebla
+    float k=(float)sky_w/6.2831853f;     // texture px per radian (same in H and V)
+    float hazespan=0.35f;                // rad (~20): below this elevation the sky blends with the fog
     if(vw>SKY_MAXDIM||vh>SKY_MAXDIM||sky_w<=0||sky_h<=0) return;
-    // Tablas de angulo por columna/fila (atan). Solo se recalculan si cambia el
-    // tamaño del viewport o de la textura (no cada frame).
+    // Per-column/row angle tables (atan). Only recomputed if the
+    // viewport or texture size changes (not every frame).
     if(sky_cd_vw!=vw || sky_cd_vh!=vh || sky_cd_w!=sky_w){
         float half=(float)vw*0.5f, hrel=hh-(float)vy;
         for(x=0;x<vw;x++)
@@ -2067,16 +2067,16 @@ static void render_sky(int vx,int vy,int vw,int vh,float focal,float hh,
             rowang[y]=(float)atan((double)((hrel-(float)y)/focal));
         sky_cd_vw=vw; sky_cd_vh=vh; sky_cd_w=sky_w;
     }
-    // Columna de textura por columna de pantalla (azimut, envuelto a [0,sky_w)).
+    // Texture column per screen column (azimuth, wrapped to [0,sky_w)).
     base=(int)(-yaw*k);
     for(x=0;x<vw;x++){
         int c=base+sky_coldelta[x]; c%=sky_w; if(c<0)c+=sky_w;
         skycol[x]=c;
     }
-    // Fila de textura por fila de pantalla (elevacion). Fila sky_h-1 = horizonte
-    // (elevacion 0), fila 0 = cenit. Bajo el horizonte se clampa (lo tapa el suelo).
-    // Si hay niebla: nivel de bruma por fila segun elevacion (horizonte->maximo,
-    // cenit->0) para que el cielo se funda con la niebla SIN costura.
+    // Texture row per screen row (elevation). Row sky_h-1 = horizon
+    // (elevation 0), row 0 = zenith. Below the horizon it clamps (the floor covers it).
+    // If there's fog: haze level per row by elevation (horizon->max,
+    // zenith->0) so the sky blends with the fog SEAMLESSLY.
     for(y=0;y<vh;y++){
         float el=pitch+rowang[y];
         int ty=(sky_h-1)-(int)(el*k);
@@ -2102,10 +2102,10 @@ static void render_sky(int vx,int vy,int vw,int vh,float focal,float hh,
     }
 }
 
-// Renderiza todas las instancias de objetos 3D encoladas con DRAW_OBJ9 en la
-// vista actual. Usa los parametros de camara globales (g_*) ya establecidos
-// por render_view. Reutiliza tsort[]/order[]/bcnt[] (el sort del mundo ya
-// termino) y el z-buffer existente -> oclusion correcta con la geometria estatica.
+// Renders all the 3D object instances queued with DRAW_OBJ9 in the
+// current view. Uses the global camera params (g_*) already set
+// by render_view. Reuses tsort[]/order[]/bcnt[] (the world's sort is
+// done) and the existing z-buffer -> correct occlusion with the static geometry.
 static void render_obj9_instances(char *vid,int W,int H,float fcull){
     int qi;
     (void)H;
@@ -2116,9 +2116,9 @@ static void render_obj9_instances(char *vid,int W,int H,float fcull){
         int i,ti,ndraw=0;
         float iys=inst->ysin,iyc=inst->ycos;
         float ix=inst->ix,iy=inst->iy,iz=inst->iz;
-        // Far clip por objeto: descartar la instancia entera si su ORIGEN esta
-        // mas lejos que fcull (misma distancia a la que desaparecen los poligonos
-        // del mundo). Barato: 1 transform del centro, no de cada vertice.
+        // Per-object far clip: discard the whole instance if its ORIGIN is
+        // farther than fcull (same distance at which the world polygons
+        // disappear). Cheap: 1 transform of the center, not of every vertex.
         if(fcull>0.0f){
             float dx=ix-g_Cx, dz=iz-g_Cz;
             float oz=(dx*g_ycos-dz*g_ysin)*g_pcos + (iy-g_Cy)*g_psin;
@@ -2129,13 +2129,13 @@ static void render_obj9_instances(char *vid,int W,int H,float fcull){
         char *mmip=mdl->mip;
         int   mmw=mdl->mw,mmh=mdl->mh;
         int has_tex=(mtex!=NULL&&mdl->nuv>0);
-        // Fotogramas de animacion a mezclar (vertex morphing). Para modelos
-        // estaticos fr0==fr1 y blend=0, asi que es lectura directa sin coste.
+        // Animation frames to blend (vertex morphing). For static
+        // models fr0==fr1 and blend=0, so it's a direct read with no cost.
         V3   *fr0=mdl->vframes+(long)inst->fa*mdl->nv;
         V3   *fr1=mdl->vframes+(long)inst->fb*mdl->nv;
         float blend=inst->fblend;
         int   morph=(mdl->nframes>1&&blend>0.0f);
-        // Transformar cada vertice: local (rotacion Y + traslacion) -> camara
+        // Transform each vertex: local (Y rotation + translation) -> camera
         for(i=0;i<mdl->nv;i++){
             float vx,vy,vz;
             if(morph){
@@ -2162,7 +2162,7 @@ static void render_obj9_instances(char *vid,int W,int H,float fcull){
                 obj9bh[i]=0;
             } else obj9bh[i]=1;
         }
-        // Cribar y preparar el sort (near cull + backface)
+        // Cull and prepare the sort (near cull + backface)
         for(ti=0;ti<mdl->nt&&ndraw<MAX_TRIS;ti++){
             int a=mdl->tris[ti].a,b=mdl->tris[ti].b,c=mdl->tris[ti].c;
             float za=obj9cv[a][2],zb=obj9cv[b][2],zc=obj9cv[c][2];
@@ -2181,7 +2181,7 @@ static void render_obj9_instances(char *vid,int W,int H,float fcull){
             ndraw++;
         }
         if(!ndraw) continue;
-        // Bucket sort front-to-back (reutiliza bcnt[]/order[])
+        // Bucket sort front-to-back (reuses bcnt[]/order[])
         {
             int j,bk; float dmin=1e30f,dmax=-1e30f,inv;
             for(j=0;j<ndraw;j++){float d=tsort[j].depth;if(d<dmin)dmin=d;if(d>dmax)dmax=d;}
@@ -2202,14 +2202,14 @@ static void render_obj9_instances(char *vid,int W,int H,float fcull){
                 }
             }
         }
-        // Rasterizar (via rapida + via de recorte, identicas al mundo)
+        // Rasterize (fast path + clip path, identical to the world)
         for(i=0;i<ndraw;i++){
             int oi=order[i],ti2=tsort[oi].idx;
             int a=mdl->tris[ti2].a,b=mdl->tris[ti2].b,c=mdl->tris[ti2].c;
             int textured=has_tex&&(mdl->tris[ti2].ua>=0);
             unsigned char flatcol=textured?0:mdl->tris[ti2].flat;
             if(tsort[oi].ci==0){
-                // ---- Via rapida: tri entero delante del near ----
+                // ---- Fast path: whole tri in front of the near ----
                 float u0=0,v0=0,u1=0,v1=0,u2=0,v2=0;
                 char *utex=mtex;int utw=mtw,uth=mth;
                 float ax=obj9px[a],ay=obj9py[a],bx=obj9px[b],by=obj9py[b],cx2=obj9px[c],cy2=obj9py[c];
@@ -2239,7 +2239,7 @@ static void render_obj9_instances(char *vid,int W,int H,float fcull){
                     cx2,cy2,u2,v2,obj9cv[c][2],
                     textured?utex:NULL,utw,uth,flatcol);
             } else {
-                // ---- Via de recorte: cruza el near plane ----
+                // ---- Clip path: crosses the near plane ----
                 CVert in[8],out[10];
                 int nin=3,nout=0,k;
                 float sxf[10],syf[10],sw[10];
@@ -2293,15 +2293,15 @@ static void render_obj9_instances(char *vid,int W,int H,float fcull){
     }
 }
 
-// Renderiza UNA vista (viewport) en el buffer. El z-buffer/buffer usan el ancho
-// completo W como stride; el dibujo se limita al rect del viewport (clip_*).
+// Renders ONE view (viewport) into the buffer. The z-buffer/buffer use the full
+// width W as stride; the drawing is limited to the viewport rect (clip_*).
 static void render_view(M9View *v,char *vid,int W,int H){
     float Cx,Cy,Cz,yaw,pitch,ysin,ycos,psin,pcos;
     float focal,hw,hh,fcull;
     int i,ndraw,cbase;
     int vx,vy,vw,vh;
 
-    // Resolver el rect del viewport (vw/vh==0 -> pantalla completa)
+    // Resolve the viewport rect (vw/vh==0 -> full screen)
     vx=v->vx; vy=v->vy; vw=v->vw; vh=v->vh;
     if(vw<=0){vx=0;vw=W;} if(vh<=0){vy=0;vh=H;}
     if(vx<0){vw+=vx;vx=0;} if(vy<0){vh+=vy;vy=0;}
@@ -2311,23 +2311,23 @@ static void render_view(M9View *v,char *vid,int W,int H){
 
     if(!get_camera(v->cam,v->bind,&Cx,&Cy,&Cz,&yaw,&pitch,&cbase))return;
 
-    // --- Colision: empujar la camara fuera de las paredes y reescribir su
-    //     posicion en el proceso (asi advance/xadvance "no atraviesan" muros) --
+    // --- Collision: push the camera out of the walls and rewrite its
+    //     position in the process (so advance/xadvance "don't go through" walls) --
     if(m9_collision && cbase>=0 && (n_walls>0 || (m9_step>0.0f && n_floors>0))){
         float r=(float)mem[cbase+P_RADIUS]/m9_unitscale;
-        float feet=(float)mem[cbase+P_Z]/m9_unitscale;   // pies del jugador (uds OBJ)
-        float eyeoff=Cy-feet;                             // ojo por encima de los pies
+        float feet=(float)mem[cbase+P_Z]/m9_unitscale;   // player feet (OBJ units)
+        float eyeoff=Cy-feet;                             // eye above the feet
         if(r<=0.0f) r=(float)COLLIDE_DEF/m9_unitscale;
-        // Paredes: deslizamiento (las <= m9_step de alto no bloquean: son escalones
-        // que el floor-follow sube). Barrido anti-tunneling antes del deslizamiento.
+        // Walls: sliding (those <= m9_step tall don't block: they're steps
+        // the floor-follow climbs). Anti-tunneling sweep before the sliding.
         if(n_walls>0){
             if(v->haslast) collide_swept(v->lastx,v->lastz,&Cx,&Cz,Cy,r,feet,m9_step);
             collide_xz(&Cx,&Cz,Cy,r,feet,m9_step);
             v->lastx=Cx; v->lastz=Cz; v->haslast=1;
         }
-        // Escalones y rampas (floor-follow): subir los pies al suelo que hay debajo,
-        // siempre que el desnivel sea <= m9_step. NO baja los pies (eso lo hace la
-        // gravedad del PRG). El ojo (Cy) sube con los pies para este mismo frame.
+        // Steps and ramps (floor-follow): raise the feet to the floor below,
+        // as long as the height difference is <= m9_step. It does NOT lower the feet (that's done by
+        // the PRG's gravity). The eye (Cy) rises with the feet for this same frame.
         if(m9_step>0.0f && n_floors>0){
             float fy;
             if(floor_height(Cx,Cz,feet+m9_step,&fy) && feet<fy) feet=fy;
@@ -2343,66 +2343,66 @@ static void render_view(M9View *v,char *vid,int W,int H){
     {int pi2=(int)(pitch*TRIG_K)&TRIG_MASK; psin=sin_tab[pi2]; pcos=cos_tab[pi2];}
     focal=(float)vw*m9_focal_k; hw=(float)vx+(float)vw*0.5f; hh=(float)vy+(float)vh*0.5f;
 
-    // Distancia de corte (far clip): far_clip y, si hay niebla, fog_far (lo que
-    // queda detras de la niebla es color de fondo, no hace falta dibujarlo).
+    // Cut-off distance (far clip): far_clip and, if there's fog, fog_far (what's
+    // behind the fog is background color, no need to draw it).
     fcull=far_clip;
     if(fog_on&&fog_far>0.0f){ if(fcull<=0.0f||fog_far<fcull) fcull=fog_far; }
 
-    // --- Fondo (color de ambiente) limitado al rect del viewport ------------
-    // Con line doubler: solo limpiar las lineas que se van a renderizar; el
-    // resto se duplican luego. Usamos memset (mas rapido que el bucle manual).
+    // --- Background (ambient color) limited to the viewport rect ------------
+    // With line doubler: only clear the lines that will be rendered; the
+    // rest are duplicated later. We use memset (faster than the manual loop).
     {
         int step=m9_downscale>1?m9_downscale:1;
         if(sky_on && sky_data && vw<=SKY_MAXDIM && vh<=SKY_MAXDIM){
-            render_sky(vx,vy,vw,vh,focal,hh,yaw,pitch,vid,W,step);   // cielo panoramico
+            render_sky(vx,vy,vw,vh,focal,hh,yaw,pitch,vid,W,step);   // panoramic sky
         } else {
             unsigned char bg=(unsigned char)PAL_ENV;
             int yy;
             for(yy=vy; yy<vy+vh; yy+=step)
-                memset((unsigned char*)vid+(long)yy*W+vx, (int)bg, (size_t)vw);  // fondo plano
+                memset((unsigned char*)vid+(long)yy*W+vx, (int)bg, (size_t)vw);  // flat background
         }
     }
 
-    // Z-buffer limitado al rect del viewport (limpiar a 0 = lejos)
+    // Z-buffer limited to the viewport rect (clear to 0 = far)
     {int yy, step=m9_downscale>1?m9_downscale:1;
      for(yy=vy; yy<vy+vh; yy+=step)
          memset(zbuf+(long)yy*W+vx, 0, (size_t)vw*2);
     }
 
-    // 1. Guardar los parametros de camara de esta vista (g_*) para la
-    //    transformacion PEREZOSA de vertices, e incrementar el sello de frame
-    //    (vstamp y tstamp). Cada vertice se transforma bajo demanda la primera vez
-    //    que un triangulo visible lo necesita (xform_vertex desde consider_tri),
-    //    asi los vertices de celdas descartadas por la rejilla ni se tocan.
+    // 1. Save this view's camera params (g_*) for the LAZY
+    //    vertex transform, and increment the frame stamp
+    //    (vstamp and tstamp). Each vertex is transformed on demand the first time
+    //    a visible triangle needs it (xform_vertex from consider_tri),
+    //    so the vertices of cells discarded by the grid aren't even touched.
     g_Cx=Cx;g_Cy=Cy;g_Cz=Cz; g_ysin=ysin;g_ycos=ycos;g_psin=psin;g_pcos=pcos;
     g_focal=focal;g_hw=hw;g_hh=hh;
     frame_stamp++;
 
-    // 2. Sort: near cull + far clip + backface + FRUSTUM culling. tsort.ci marca
-    //    si el triangulo cruza el near (needs_clip) para el rasterizado.
-    //    Con rejilla (grid_n): solo se consideran los triangulos de las celdas
-    //    dentro del frustum horizontal + far clip (Tier 3). Sin rejilla: todos.
+    // 2. Sort: near cull + far clip + backface + FRUSTUM culling. tsort.ci marks
+    //    whether the triangle crosses the near (needs_clip) for the rasterizing.
+    //    With grid (grid_n): only the triangles of the cells inside the horizontal
+    //    frustum + far clip are considered (Tier 3). Without grid: all of them.
     ndraw=0;
     if(grid_n){
         int gx,gz;
-        float fk=0.5f/m9_focal_k;     // tan(medio FOV horizontal)
+        float fk=0.5f/m9_focal_k;     // tan(half horizontal FOV)
         for(gz=0;gz<GRID_DIM;gz++){
             float ccz=grid_minz+((float)gz+0.5f)*grid_ch;
             for(gx=0;gx<GRID_DIM;gx++){
                 int cell=gz*GRID_DIM+gx, s=grid_start[cell], e=grid_start[cell+1], k;
                 float ccx,dx,dz,rx,rz,lim;
-                if(s>=e) continue;                 // celda vacia
+                if(s>=e) continue;                 // empty cell
                 ccx=grid_minx+((float)gx+0.5f)*grid_cw;
                 dx=ccx-Cx; dz=ccz-Cz;
-                rx=dx*ysin+dz*ycos;                // eje X de camara (yaw, sin pitch)
-                rz=dx*ycos-dz*ysin;                // hacia delante (el pitch no afecta a XZ)
-                if(rz < -grid_cellrad) continue;   // celda enteramente detras
-                if(fcull>0.0f && rz-grid_cellrad>fcull) continue;   // mas alla del far clip
-                lim=fk*(rz+grid_cellrad)+grid_cellrad;              // frustum horizontal
+                rx=dx*ysin+dz*ycos;                // camera X axis (yaw, without pitch)
+                rz=dx*ycos-dz*ysin;                // forward (the pitch doesn't affect XZ)
+                if(rz < -grid_cellrad) continue;   // cell entirely behind
+                if(fcull>0.0f && rz-grid_cellrad>fcull) continue;   // beyond the far clip
+                lim=fk*(rz+grid_cellrad)+grid_cellrad;              // horizontal frustum
                 if(rx>lim||-rx>lim) continue;
                 for(k=s;k<e;k++){
                     int t=grid_items[k];
-                    if(tstamp[t]==frame_stamp) continue;   // ya procesado (otra celda)
+                    if(tstamp[t]==frame_stamp) continue;   // already processed (another cell)
                     tstamp[t]=frame_stamp;
                     consider_tri(t,fcull,&ndraw);
                 }
@@ -2412,11 +2412,11 @@ static void render_view(M9View *v,char *vid,int W,int H){
         for(i=0;i<n_tris;i++) consider_tri(i,fcull,&ndraw);
     }
 
-    // 3. BUCKET SORT front-to-back en O(n): cuantiza la profundidad en NBUCKETS
-    //    cubetas y ordena por conteo (no comparaciones). Con z-buffer el orden
-    //    EXACTO dentro de una cubeta es irrelevante (el z-buffer decide la
-    //    oclusion); basta el orden grueso cerca->lejos para que el z-test
-    //    rechace pronto lo tapado. Escala O(n) frente al O(n^2) del insertion.
+    // 3. BUCKET SORT front-to-back in O(n): quantizes the depth into NBUCKETS
+    //    buckets and sorts by count (no comparisons). With z-buffer the EXACT
+    //    order within a bucket is irrelevant (the z-buffer decides the
+    //    occlusion); a coarse near->far order is enough for the z-test
+    //    to reject covered things early. Scales O(n) vs the O(n^2) of insertion.
     {
         int j,bk;
         float dmin=1e30f,dmax=-1e30f,inv;
@@ -2434,7 +2434,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
                 if(bk<0)bk=0; else if(bk>=NBUCKETS)bk=NBUCKETS-1;
                 bcnt[bk+1]++;
             }
-            for(j=1;j<=NBUCKETS;j++)bcnt[j]+=bcnt[j-1];   // prefijo -> inicio de cada cubeta
+            for(j=1;j<=NBUCKETS;j++)bcnt[j]+=bcnt[j-1];   // prefix -> start of each bucket
             for(j=0;j<ndraw;j++){
                 bk=(int)((tsort[j].depth-dmin)*inv);
                 if(bk<0)bk=0; else if(bk>=NBUCKETS)bk=NBUCKETS-1;
@@ -2443,15 +2443,15 @@ static void render_view(M9View *v,char *vid,int W,int H){
         }
     }
 
-    // 4. Rasterizar. Via RAPIDA si el tri no cruza el near (mayoria): usa la
-    //    proyeccion ya calculada, sin recorte. Si cruza, recorte Sutherland-H.
+    // 4. Rasterize. FAST path if the tri doesn't cross the near (majority): uses the
+    //    projection already computed, no clipping. If it crosses, Sutherland-H clip.
     for(i=0;i<ndraw;i++){
         int oi=order[i];
         int ti=tsort[oi].idx;
         int a=mesh_t[ti].a,b=mesh_t[ti].b,c=mesh_t[ti].c;
-        // Seleccion de textura por material: si el slot del tri no tiene textura,
-        // cae al slot 0 (textura por defecto cargada en LOAD_WLD9). Costo: 1 check
-        // por triangulo, fuera del bucle de pixels (impacto en rendimiento nulo).
+        // Texture selection by material: if the tri's slot has no texture,
+        // it falls back to slot 0 (default texture loaded in LOAD_WLD9). Cost: 1 check
+        // per triangle, outside the pixel loop (zero performance impact).
         {int mat=(int)mesh_t[ti].mat;
         char *mtex=mat_data[mat]?mat_data[mat]:mat_data[0];
         int   mtw =mat_data[mat]?mat_w[mat]:mat_w[0];
@@ -2463,7 +2463,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
         unsigned char flatcol = textured?0:mesh_t[ti].flat;
 
         if(tsort[oi].ci==0){
-            // ---- Via rapida: triangulo entero delante del near ----
+            // ---- Fast path: whole triangle in front of the near ----
             int ax=psx[a],ay=psy[a],bx=psx[b],by=psy[b],cx2=psx[c],cy2=psy[c];
             int mnx,mxx,mny,mxy;
             float u0=0,v0=0,u1=0,v1=0,u2=0,v2=0;
@@ -2478,7 +2478,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
                 u0=mesh_uv[mesh_t[ti].ua].u; v0=mesh_uv[mesh_t[ti].ua].v;
                 u1=mesh_uv[mesh_t[ti].ub].u; v1=mesh_uv[mesh_t[ti].ub].v;
                 u2=mesh_uv[mesh_t[ti].uc].u; v2=mesh_uv[mesh_t[ti].uc].v;
-                // LOD: si el triangulo minifica mucho la textura usar el mipmap.
+                // LOD: if the triangle minifies the texture a lot, use the mipmap.
                 if(mmip){
                     long sa=(long)(bx-ax)*(long)(cy2-ay)-(long)(cx2-ax)*(long)(by-ay);
                     float uvx=(u1-u0)*(v2-v0)-(u2-u0)*(v1-v0);
@@ -2498,11 +2498,11 @@ static void render_view(M9View *v,char *vid,int W,int H){
             continue;
         }
 
-        // ---- Via de recorte: el triangulo cruza el plano cercano ----
+        // ---- Clip path: the triangle crosses the near plane ----
         {
         CVert in[8],out[10];
         int nin=3,nout=0,k;
-        float sxf[10],syf[10],sw[10];   // pantalla SUBPIXEL (para el rasterizado)
+        float sxf[10],syf[10],sw[10];   // SUBPIXEL screen (for the rasterizing)
         int mnx=999999,mxx=-999999,mny=999999,mxy=-999999;
         in[0].cx=camv[a][0];in[0].cy=camv[a][1];in[0].cz=camv[a][2];
         in[1].cx=camv[b][0];in[1].cy=camv[b][1];in[1].cz=camv[b][2];
@@ -2536,7 +2536,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
             sxf[k]=hw + out[k].cx*focal*inv;     // subpixel (float)
             syf[k]=hh - out[k].cy*focal*inv;
             sw[k] =w;
-            ix=fast_ftol(sxf[k]); iy=fast_ftol(syf[k]);   // entero solo para el bbox
+            ix=fast_ftol(sxf[k]); iy=fast_ftol(syf[k]);   // integer only for the bbox
             if(ix<mnx)mnx=ix; if(ix>mxx)mxx=ix;
             if(iy<mny)mny=iy; if(iy>mxy)mxy=iy;
         }
@@ -2549,17 +2549,17 @@ static void render_view(M9View *v,char *vid,int W,int H){
                 textured?mtex:0, mtw, mth, flatcol);
         }
         }
-        }   // cierre del bloque {int mat=...}
+        }   // close the {int mat=...} block
     }
 
-    // --- Objetos 3D (DRAW_OBJ9): renderizar despues del mundo para que el
-    //     z-buffer ya tenga la geometria estatica y la oclusion sea correcta. ---
+    // --- 3D objects (DRAW_OBJ9): render after the world so the
+    //     z-buffer already has the static geometry and the occlusion is correct. ---
     render_obj9_instances(vid,W,H,fcull);
 
-    // --- Billboards dibujados por la DLL en ESTE viewport (multi-vista) -------
-    // Solo si hay un FPG cargado en la DLL (MODE9_LOADFPG). Cada proceso c_m9 se
-    // proyecta con la camara de ESTA vista y se dibuja con oclusion por pixel.
-    // No se dibuja el marcador de la propia camara de la vista.
+    // --- Billboards drawn by the DLL in THIS viewport (multi-view) -------
+    // Only if there's an FPG loaded in the DLL (MODE9_LOADFPG). Each c_m9 process is
+    // projected with THIS view's camera and drawn with per-pixel occlusion.
+    // The marker of the view's own camera isn't drawn.
     if(n_fpgspr>0){
         int camid = v->bind ? mem[v->bind+1] : v->cam;
         int first=*_id_init_offset, last=*_id_end_offset, step=*_process_size, b;
@@ -2572,8 +2572,8 @@ static void render_view(M9View *v,char *vid,int W,int H){
             Py=(float)mem[b+P_Z]/m9_unitscale;
             world_to_cam(Px,Py,Pz,Cx,Cy,Cz,ysin,ycos,psin,pcos,&ocx,&ocy,&ocz);
             if(ocz<NEAR_PLANE) continue;
-            if(fcull>0.0f && ocz>fcull) continue;   // far clip: igual que la geometria
-            // grafico: angular (xgraph) segun ESTA vista, o el graph del proceso
+            if(fcull>0.0f && ocz>fcull) continue;   // far clip: same as the geometry
+            // graphic: angular (xgraph) by THIS view, or the process's graph
             {int xg=mem[b+P_XGRAPH];
              if(xg&&mem[xg]>0){
                  int n=mem[xg],sector; float oa,va,rel,tp=6.2831853f;
@@ -2588,27 +2588,27 @@ static void render_view(M9View *v,char *vid,int W,int H){
             si=find_sprite(gr); if(si<0) continue;
             inv=fast_recip(ocz);
             {int scx=fast_ftol(hw+ocx*focal*inv), scy=fast_ftol(hh-ocy*focal*inv);
-             // El tamaño debe escalar con la resolucion igual que la geometria
-             // (que proyecta con focal=vw*m9_focal_k). 320 = ancho de referencia
-             // donde size=100 esta calibrado. Sin esto, los billboards encogen
-             // (en pixeles fijos) al subir la resolucion.
+             // The size must scale with the resolution like the geometry
+             // (which projects with focal=vw*m9_focal_k). 320 = reference width
+             // where size=100 is calibrated. Without this, the billboards shrink
+             // (in fixed pixels) when the resolution goes up.
              int sp9=fast_ftol(100.0f*inv*((float)vw/320.0f)); int fin,zfix;
              int basesize=mem[b+P_SIZE];
              int flv; char *fm;
              if(sp9<1)sp9=1;
              fin=(sp9*basesize)/100; if(fin<1)fin=1;
              zfix=fast_ftol(inv*ZSCALE); if(zfix<0)zfix=0; else if(zfix>65535)zfix=65535;
-             // Niebla del sprite segun su distancia (ocz), igual que la geometria.
+             // Sprite fog by its distance (ocz), like the geometry.
              flv=fog_on?fog_level(ocz):0;
              fm=(flv>0)?&fog_map[flv*256]:0;
              blit_sprite(si,scx,scy,fin,zfix,vid,W,fm);
             }
         }
     }
-    // --- Line doubler: copiar cada linea renderizada a las q-1 siguientes -----
-    // Se hace DESPUES de los billboards (que ya escriben con z-test correcto en
-    // las lineas pares). Solo el buffer de video; el z-buffer queda con huecos
-    // pero se limpia al inicio del siguiente frame, no importa.
+    // --- Line doubler: copy each rendered line to the next q-1 -----
+    // Done AFTER the billboards (which already write with correct z-test on
+    // the even lines). Only the video buffer; the z-buffer is left with gaps
+    // but is cleared at the start of the next frame, doesn't matter.
     if(m9_downscale>1){
         int yy,qq;
         for(yy=vy; yy<vy+vh; yy+=m9_downscale){
@@ -2617,11 +2617,11 @@ static void render_view(M9View *v,char *vid,int W,int H){
                 memcpy((unsigned char*)vid+(long)(yy+qq)*W+vx, src, (size_t)vw);
         }
     }
-    // Nota: la paleta NO se reenvia cada frame (set_palette solo en los setters).
+    // Note: the palette is NOT resent each frame (set_palette only in the setters).
 }
 
-// do_render: prepara el buffer y el z-buffer y renderiza todas las vistas
-// activas (1 = pantalla completa; >1 = split-screen).
+// do_render: prepares the buffer and the z-buffer and renders all the active
+// views (1 = full screen; >1 = split-screen).
 static void do_render(void){
     int W,H,vi;
     char *vid;
@@ -2631,7 +2631,7 @@ static void do_render(void){
     W=*_wide;H=*_height;
     if(W<=0||H<=0)return;
 
-    // Z-buffer (16 bits) a tamaño de pantalla completa; cada vista limpia su rect.
+    // Z-buffer (16 bits) at full-screen size; each view clears its rect.
     if(!zbuf||zbuf_w!=W||zbuf_h!=H){
         if(zbuf)div_free(zbuf);
         zbuf=(unsigned short*)div_malloc((size_t)((long)W*(long)H*(long)sizeof(unsigned short)));
@@ -2641,14 +2641,14 @@ static void do_render(void){
 
     for(vi=0; vi<MAX_VIEWS; vi++)
         if(views[vi].active) render_view(&views[vi],vid,W,H);
-    n_obj9_queue=0;   // limpiar cola tras renderizar todos los viewports
+    n_obj9_queue=0;   // clear the queue after rendering all viewports
 }
 
 // ============================================================================
 // MODE9_BILLBOARD / MODE9_PROJECT
 // ============================================================================
-// Proyecta (wx,wy,wz) uds DIV2 a pantalla. Devuelve 1 visible (escribe sx,sy y
-// sz=profundidad en uds DIV2, szpct=escala%) o 0 si tras la camara.
+// Projects (wx,wy,wz) DIV2 units to screen. Returns 1 visible (writes sx,sy and
+// sz=depth in DIV2 units, szpct=scale%) or 0 if behind the camera.
 static int project_world(int wx,int wy,int wz,int *sx,int *sy,int *depthu,int *sizepct){
     float Cx,Cy,Cz,yaw,pitch,ysin,ycos,psin,pcos;
     float Px,Py,Pz,ocx,ocy,ocz,focal,hw,hh,w;
@@ -2661,8 +2661,8 @@ static int project_world(int wx,int wy,int wz,int *sx,int *sy,int *depthu,int *s
     Px=(float)wx/m9_unitscale; Pz=(float)wy/m9_unitscale; Py=(float)wz/m9_unitscale;
     world_to_cam(Px,Py,Pz,Cx,Cy,Cz,ysin,ycos,psin,pcos,&ocx,&ocy,&ocz);
     if(ocz<NEAR_PLANE)return 0;
-    // Far clip: oculto (mismo limite que la geometria del mundo; con niebla activa
-    // se recorta ademas a fog_far, lo que queda detras es del color de fondo).
+    // Far clip: hidden (same limit as the world geometry; with active fog
+    // it also clips at fog_far, what's behind is the background color).
     {float fcull=far_clip;
      if(fog_on&&fog_far>0.0f){ if(fcull<=0.0f||fog_far<fcull) fcull=fog_far; }
      if(fcull>0.0f && ocz>fcull) return 0;}
@@ -2671,29 +2671,29 @@ static int project_world(int wx,int wy,int wz,int *sx,int *sy,int *depthu,int *s
     *sx=(int)(hw+ocx*focal/w);
     *sy=(int)(hh-ocy*focal/w);
     *depthu=(int)(w*m9_unitscale);
-    // escala: 100% a 1 unidad OBJ de distancia (ajustable con basesize). Escala
-    // con la resolucion (320 = ancho de referencia) para no encoger a mas res.
+    // scale: 100% at 1 OBJ unit of distance (adjustable with basesize). Scales
+    // with the resolution (320 = reference width) to not shrink at higher res.
     {int s=(int)(100.0f/w*((float)W/320.0f)+0.5f); if(s<1)s=1; if(s>2000)s=2000; *sizepct=s;}
 
-    // OCLUSION contra el z-buffer: si en el pixel del sprite hay geometria mas
-    // cercana, el sprite esta detras de una pared -> oculto (estilo modo 7/Doom).
-    // Usa el z-buffer del frame ANTERIOR (se rellena en do_render, que corre
-    // despues de la logica de procesos): 1 frame de desfase, imperceptible.
+    // OCCLUSION against the z-buffer: if the sprite's pixel has closer
+    // geometry, the sprite is behind a wall -> hidden (mode 7/Doom style).
+    // Uses the PREVIOUS frame's z-buffer (filled in do_render, which runs
+    // after the process logic): 1 frame of lag, imperceptible.
     if(m9_occlude && zbuf && zbuf_w==W && zbuf_h==H){
         int ix=*sx, iy=*sy;
         if(ix>=0&&ix<W&&iy>=0&&iy<H){
             int zspr=(int)((1.0f/w)*ZSCALE);
             int zgeo=(int)zbuf[iy*W+ix];
-            // bias ~3% para que un sprite pegado a una superficie no parpadee
+            // ~3% bias so a sprite stuck to a surface doesn't flicker
             if(zgeo > zspr + (zspr>>5)) return 0;
         }
     }
     return 1;
 }
 
-// Si el proceso tiene xgraph (tabla de graficos angulares, como en el modo 7),
-// elige el grafico segun el angulo desde el que la camara ve al sprite.
-// Tabla: mem[xg]=N (nº de graficos), mem[xg+1..xg+N]=codigos repartidos en 360º.
+// If the process has xgraph (angular graphics table, like in mode 7),
+// it picks the graphic by the angle from which the camera sees the sprite.
+// Table: mem[xg]=N (num graphics), mem[xg+1..xg+N]=codes spread over 360deg.
 static void pick_angular_graph(int base,int wx,int wy){
     int xg=mem[base+P_XGRAPH];
     int n,sector;
@@ -2704,11 +2704,11 @@ static void pick_angular_graph(int base,int wx,int wy){
     if(!get_camera(m9_camera,m9_bind,&Cx,&Cy,&Cz,&yaw,&pitch,0))return;
     Pxw=(float)wx/m9_unitscale; Pzw=(float)wy/m9_unitscale;
     objang =(float)mem[base+P_ANGLE]*(3.14159265f/180000.0f);
-    // angulo (convencion DIV2) de la direccion sprite->camara
+    // angle (DIV2 convention) of the sprite->camera direction
     viewang=(float)atan2((double)(Pzw-Cz),(double)(Cx-Pxw));
     rel=viewang-objang;
     twopi=6.2831853f;
-    rel=rel-twopi*(float)floor((double)(rel/twopi));   // normalizar a [0,2pi)
+    rel=rel-twopi*(float)floor((double)(rel/twopi));   // normalize to [0,2pi)
     sector=(int)(rel/twopi*(float)n+0.5f);
     if(sector>=n)sector-=n; if(sector<0)sector+=n;
     mem[base+P_GRAPH]=mem[xg+1+sector];
@@ -2720,39 +2720,39 @@ static void mode9_billboard_fn(void){
     base=find_process(pid);
     if(base<0){retval(0);return;}
     if(!project_world(wx,wy,wz,&sx,&sy,&depthu,&sizepct)){
-        mem[base+P_SIZE]=0;          // tras la camara u oculto por geometria
+        mem[base+P_SIZE]=0;          // behind the camera or hidden by geometry
         retval(0);return;
     }
     mem[base+P_X]=sx;
     mem[base+P_Y]=sy;
     mem[base+P_SIZE]=(sizepct*basesize)/100;
     if(mem[base+P_SIZE]<1)mem[base+P_SIZE]=1;
-    mem[base+P_Z]=depthu;            // mayor profundidad -> dibujado detras
-    pick_angular_graph(base,wx,wy);  // grafico segun angulo (si hay xgraph)
+    mem[base+P_Z]=depthu;            // greater depth -> drawn behind
+    pick_angular_graph(base,wx,wy);  // graphic by angle (if there's xgraph)
     retval(1);
 }
 
-// MODE9_OCCLUDE(on): 1=ocultar billboards tapados por geometria (def), 0=off.
+// MODE9_OCCLUDE(on): 1=hide billboards covered by geometry (def), 0=off.
 static void mode9_occlude_fn(void){
     m9_occlude=getparm()?1:0;
     retval(0);
 }
-// MODE9_CTYPE(n): valor de la constante c_m9 (ctype de billboard automatico).
-// Debe coincidir con CONST c_m9 del PRG. Por defecto 200.
+// MODE9_CTYPE(n): value of the c_m9 constant (automatic billboard ctype).
+// Must match the PRG's CONST c_m9. Default 200.
 static void mode9_ctype_fn(void){
     int n=getparm();
-    if(n>2) m9_ctype=n;   // no permitir colisionar con c_screen/scroll/m7
+    if(n>2) m9_ctype=n;   // don't allow colliding with c_screen/scroll/m7
     retval(0);
 }
 
 // ============================================================================
-// Billboards automaticos (ctype = c_m9), al estilo c_m7 del modo 7:
-// el usuario solo pone ctype=c_m9 y x,y,z (MUNDO), size (escala %), graph y
-// angle en el proceso; NO llama a nada cada frame. Tras pintar el escenario 3D
-// se recorren todos los procesos c_m9, se proyectan y se convierten a c_screen
-// (con x,y de pantalla, size escalado por distancia y z=profundidad) para que
-// DIV2 los dibuje con su propio escalador. Despues del pintado se restauran sus
-// coordenadas de mundo y su ctype c_m9 (restore_m9_sprites en post_process_buffer).
+// Automatic billboards (ctype = c_m9), mode-7 c_m7 style:
+// the user only sets ctype=c_m9 and x,y,z (WORLD), size (scale %), graph and
+// angle in the process; does NOT call anything each frame. After painting the 3D scenario
+// all c_m9 processes are scanned, projected and converted to c_screen
+// (with screen x,y, size scaled by distance and z=depth) so that
+// DIV2 draws them with its own scaler. After painting their world
+// coordinates and c_m9 ctype are restored (restore_m9_sprites in post_process_buffer).
 // ============================================================================
 static void process_m9_sprites(void){
     int first,last,step,b;
@@ -2762,29 +2762,29 @@ static void process_m9_sprites(void){
     first=*_id_init_offset; last=*_id_end_offset;
     for(b=first; b<=last; b+=step){
         if(mem[b+P_CTYPE]!=m9_ctype) continue;
-        if(mem[b+P_ID]==0 || mem[b+P_STATUS]==0) continue;   // slot libre/muerto
+        if(mem[b+P_ID]==0 || mem[b+P_STATUS]==0) continue;   // free/dead slot
         if(n_m9spr>=MAX_SPR) break;
         {
             int wx=mem[b+P_X], wy=mem[b+P_Y], wz=mem[b+P_Z];
             int basesize=mem[b+P_SIZE];
             int sx,sy,depthu,sizepct;
-            // guardar el estado de mundo para restaurarlo tras el pintado
+            // save the world state to restore it after painting
             m9spr[n_m9spr].base=b;
             m9spr[n_m9spr].wx=wx; m9spr[n_m9spr].wy=wy; m9spr[n_m9spr].wz=wz;
             m9spr[n_m9spr].sz=basesize; m9spr[n_m9spr].gr=mem[b+P_GRAPH];
             m9spr[n_m9spr].ct=mem[b+P_CTYPE];
             n_m9spr++;
-            // convertir a c_screen para que DIV2 lo pinte como sprite 2D
+            // convert to c_screen so DIV2 paints it as a 2D sprite
             mem[b+P_CTYPE]=C_SCREEN;
             if(!project_world(wx,wy,wz,&sx,&sy,&depthu,&sizepct)){
-                mem[b+P_SIZE]=0;            // tras la camara u oculto -> no pintar
+                mem[b+P_SIZE]=0;            // behind the camera or hidden -> don't paint
             } else {
-                int s=(sizepct*basesize)/100;   // escala = distancia * size_base%
+                int s=(sizepct*basesize)/100;   // scale = distance * size_base%
                 if(s<1)s=1;
                 mem[b+P_X]=sx; mem[b+P_Y]=sy;
                 mem[b+P_SIZE]=s;
-                mem[b+P_Z]=depthu;          // mayor profundidad -> pintado detras
-                pick_angular_graph(b,wx,wy);// grafico segun angulo (si hay xgraph)
+                mem[b+P_Z]=depthu;          // greater depth -> painted behind
+                pick_angular_graph(b,wx,wy);// graphic by angle (if there's xgraph)
             }
         }
     }
@@ -2812,49 +2812,61 @@ static void mode9_project_fn(void){
 }
 
 // ============================================================================
-// Callbacks de DIV2
+// DIV2 callbacks
 // ============================================================================
-// El escenario 3D se dibuja como FONDO: DIV2 pinta los sprites/procesos encima
-// (estilo modo 7). Asi los billboards quedan delante del escenario.
-// Tras pintar el escenario (y rellenar el z-buffer), se preparan los billboards
-// c_m9: se proyectan y se convierten a c_screen para que DIV2 los pinte.
-static void obj9_pump(void);   // carga incremental de modelos (definida mas abajo)
+// The 3D scenario is drawn as BACKGROUND: DIV2 paints the sprites/processes on top
+// (mode 7 style). So the billboards stay in front of the scenario.
+// After painting the scenario (and filling the z-buffer), the c_m9 billboards
+// are prepared: projected and converted to c_screen so DIV2 paints them.
+static void obj9_pump(void);   // incremental model loading (defined below)
 
 void background_to_buffer(void){
-    obj9_pump();        // carga de modelos OBJ en segundo plano (1 fichero/frame)
-    do_render();
-    // Si hay un FPG cargado en la DLL, los billboards los dibuja la propia DLL
-    // en cada viewport (multi-vista, ver render_view). Si no, se usa la ruta
-    // "c_screen" de DIV2 (1 sola vista) convirtiendo los procesos c_m9.
-    if(n_fpgspr==0) process_m9_sprites();
+    obj9_pump();        // background OBJ model loading (1 file per frame)
+    if(m9_active){
+        do_render();    // Mode 9 ACTIVE: the 3D scene IS the background
+        // If an FPG is loaded in the DLL, billboards are drawn by the DLL itself
+        // in each viewport (multi-view, see render_view). Otherwise the
+        // DIV2 "c_screen" path (single view) converting c_m9 processes is used.
+        if(n_fpgspr==0) process_m9_sprites();
+    } else {
+        // Mode 9 STOPPED (STOP_MODE9, or before START_MODE9): the PRG may be
+        // showing a normal 2D screen (title screen, menus...). Since we
+        // export this hook we have REPLACED DIV2's background blit, so
+        // if we don't do it ourselves put_screen/put/scroll won't show. We copy
+        // DIV2's video background to the buffer (equivalent to the flat engine
+        // background_to_buffer; 8 bpp = 1 byte per pixel).
+        char *buf=buffer, *bg=background;
+        if(buf && bg && wide>0 && height>0)
+            memcpy(buf, bg, (size_t)((long)wide*(long)height));
+    }
 }
 
-// Tras pintar los sprites, restaurar las coordenadas de mundo y el ctype c_m9
-// de los billboards (asi el PRG los maneja con coordenadas de mundo).
+// After drawing sprites, restore world coordinates and the c_m9 ctype
+// of the billboards (so the PRG handles them with world coordinates).
 void post_process_buffer(void){
     restore_m9_sprites();
 }
 
 
-// MODE9_DOWNSCALE(n): renderiza por debajo de la resolucion nativa duplicando
-// lineas, al estilo SNES Doom (antes MODE9_QUALITY).
-//   1 = resolucion nativa (def)
-//   2 = 1 de cada 2 lineas -> la otra se duplica (~2x velocidad de fill)
-//   3 = 1 de cada 3 lineas (~3x)
-//   4 = 1 de cada 4 lineas (~4x, pixel art muy gordo)
-// La ganancia real depende del fill rate (numero de pixels escritos/frame).
-// En escenas con muchos triangulos y pocos pixels tapados, x2 casi dobla los FPS.
+// MODE9_DOWNSCALE(n): renders below native resolution by duplicating
+// lines, SNES-Doom style (formerly MODE9_QUALITY).
+//   1 = native resolution (default)
+//   2 = every 2nd line -> the other is duplicated (~2x fill speed)
+//   3 = every 3rd line (~3x)
+//   4 = every 4th line (~4x, very chunky pixels)
+// Actual gain depends on fill rate (pixels written per frame).
+// In scenes with many triangles and few covered pixels, x2 nearly doubles FPS.
 static void mode9_downscale_fn(void){
     int q=getparm();
     if(q>=1&&q<=4) m9_downscale=q;
     retval(0);
 }
 
-// MODE9_PERSPECTIVE(on): correccion de perspectiva de la textura.
-//   0 = RENDIMIENTO (def): correccion afin a tramos de 16 px (rapido; la textura
-//       puede "ondular" levemente en superficies muy inclinadas).
-//   1 = CALIDAD: un 1/w exacto por pixel -> texturas perfectas, mas lento.
-// Por defecto siempre rendimiento; el usuario activa la calidad si la quiere.
+// MODE9_PERSPECTIVE(on): texture perspective correction.
+//   0 = PERFORMANCE (default): affine correction in 16-px spans (fast; texture
+//       may "wobble" slightly on steep surfaces).
+//   1 = QUALITY: exact per-pixel 1/w -> perfect textures, slower.
+// Always defaults to performance; user enables quality if desired.
 static void mode9_perspective_fn(void){
     int on=getparm();
     m9_texseg = on ? 1 : TEX_SEG;
@@ -2863,11 +2875,11 @@ static void mode9_perspective_fn(void){
 }
 
 // ============================================================================
-// Puntos de entrada de la DLL
+// DLL entry points
 // ============================================================================
-// load_obj9_texture: carga la textura MAP del modelo (opcional). tname=="" o "0"
-// deja el modelo en flat-shading. Igual logica que load_material_file pero para
-// un Obj9Model. Compartida por LOAD_OBJ9 y LOAD_OBJ9_ANIM.
+// load_obj9_texture: loads the model MAP texture (optional). tname=="" or "0"
+// leaves the model in flat-shading. Same logic as load_material_file but for
+// an Obj9Model. Shared by LOAD_OBJ9 and LOAD_OBJ9_ANIM.
 static void load_obj9_texture(Obj9Model *mdl,char *tname){
     if(tname[0]&&tname[0]!='0'){
         char magic[8]; FILE *f; int w,h,npoints;
@@ -2910,22 +2922,22 @@ static void load_obj9_texture(Obj9Model *mdl,char *tname){
 }
 
 // ============================================================================
-// LOAD_OBJ9(obj, tex, scale): carga un modelo 3D de objeto (NPC/prop 3D).
-//   obj   : fichero .OBJ del modelo (Y-up, triangulado; UVs opcionales).
-//   tex   : textura .MAP ("" = flat-shading con la rampa de sombreado del mundo).
-//   scale : uds DIV2 por unidad OBJ del modelo (igual que unitscale en LOAD_WLD9).
-// Devuelve el handle 1..MAX_OBJ9_MODELS al INSTANTE (0 si no hay slots libres);
-// la carga del fichero se hace EN SEGUNDO PLANO (no bloquea, ver obj9_pump). El
-// modelo no se dibuja hasta que termina: DRAW_OBJ9 lo ignora mientras carga (el
-// objeto aparece solo al estar listo). Usa MODE9_OBJ9_READY(handle) si necesitas
-// saber cuando esta. Los modelos se conservan hasta STOP_MODE9/divend.
+// LOAD_OBJ9(obj, tex, scale): loads a 3D object model (NPC/prop).
+//   obj   : model .OBJ file (Y-up, triangulated; UVs optional).
+//   tex   : .MAP texture ("" = flat-shading with world shading ramp).
+//   scale : DIV2 units per OBJ unit of the model (same as unitscale in LOAD_WLD9).
+// Returns the handle 1..MAX_OBJ9_MODELS IMMEDIATELY (0 if no free slots);
+// file loading is done IN THE BACKGROUND (non-blocking, see obj9_pump). The
+// model is not drawn until loading completes: DRAW_OBJ9 ignores it while loading
+// (appears only when ready). Use MODE9_OBJ9_READY(handle) if you need to
+// know when it is. Models are kept until STOP_MODE9/divend.
 // ============================================================================
 static void load_obj9_fn(void){
     int scale  =getparm();
     int tex_off=getparm();
     int obj_off=getparm();
     Obj9Model *mdl; Obj9Job *job; int midx;
-    // Reservar slot de modelo + slot de job; el parseo real lo hace obj9_pump().
+    // Reserve model slot + job slot; actual parsing done by obj9_pump().
     if(n_obj9_models>=MAX_OBJ9_MODELS||n_obj9_jobs>=MAX_OBJ9_MODELS){retval(0);return;}
     midx=n_obj9_models;
     mdl=&obj9_models[midx];
@@ -2933,7 +2945,7 @@ static void load_obj9_fn(void){
     mdl->nv=mdl->nuv=mdl->nt=0;
     mdl->tex=NULL;mdl->tw=mdl->th=0;
     mdl->mip=NULL;mdl->mw=mdl->mh=0;
-    mdl->ready=0;                              // aun cargando (segundo plano)
+    mdl->ready=0;                              // still loading (background)
     n_obj9_models++;
     job=&obj9_jobs[n_obj9_jobs++];
     job->midx=midx; job->kind=OBJ9_KIND_STATIC;
@@ -2941,19 +2953,19 @@ static void load_obj9_fn(void){
     div2c(tex_off,job->tname,sizeof(job->tname));
     job->sfac=(scale>0)?((float)scale/m9_unitscale):1.0f;
     job->nframes=1; job->step=0; job->block=NULL; job->nv=0;
-    retval(midx+1);   // handle 1-based, valido ya; el modelo aparece al cargar
+    retval(midx+1);   // 1-based handle, valid now; model appears when loaded
 }
 
 // ============================================================================
-// LOAD_OBJ9_ANIM(base, tex, scale, nframes): igual que LOAD_OBJ9 pero carga una
-// animacion por vertex morphing. Los fotogramas son ficheros "<base><n>.OBJ":
-// base="CAT", nframes=10 -> CAT0.OBJ..CAT9.OBJ. Todos deben compartir topologia
-// (mismos triangulos/UVs y mismo numero de vertices); solo cambian las posiciones.
-// La animacion ocupa UN SOLO slot de los MAX_OBJ9_MODELS, sin importar nframes.
-// Devuelve el handle al INSTANTE (0 si no hay slots); los nframes ficheros se
-// cargan EN SEGUNDO PLANO a razon de uno por frame (ya NO bloquea ni dispara el
-// watchdog/err 142, antes habia que tocar max_process_time). Animar con
-// DRAW_OBJ9_ANIM; consulta MODE9_OBJ9_READY(handle) si quieres esperar a que este.
+// LOAD_OBJ9_ANIM(base, tex, scale, nframes): like LOAD_OBJ9 but loads an
+// animation via vertex morphing. Frames are files "<base><n>.OBJ":
+// base="CAT", nframes=10 -> CAT0.OBJ..CAT9.OBJ. All must share topology
+// (same triangles/UVs and vertex count); only positions change.
+// The animation uses ONE slot from MAX_OBJ9_MODELS regardless of nframes.
+// Returns the handle IMMEDIATELY (0 if no slots); the nframes files are
+// loaded IN THE BACKGROUND at one per frame (no longer blocks or triggers
+// watchdog/err 142; previously required adjusting max_process_time). Animate with
+// DRAW_OBJ9_ANIM; check MODE9_OBJ9_READY(handle) if you want to wait until ready.
 // ============================================================================
 static void load_obj9_anim_fn(void){
     int nframes=getparm();
@@ -2962,8 +2974,8 @@ static void load_obj9_anim_fn(void){
     int base_off=getparm();
     Obj9Model *mdl; Obj9Job *job; int midx;
     if(nframes<1) nframes=1;
-    // Reservar slot + job; los N fotogramas se parsean en obj9_pump() a razon de
-    // UNO por frame, asi una anim larga ya NO bloquea ni dispara el watchdog.
+    // Reserve slot + job; the N frames are parsed in obj9_pump() at
+    // ONE per frame, so a long animation no longer blocks or triggers the watchdog.
     if(n_obj9_models>=MAX_OBJ9_MODELS||n_obj9_jobs>=MAX_OBJ9_MODELS){retval(0);return;}
     midx=n_obj9_models;
     mdl=&obj9_models[midx];
@@ -2983,14 +2995,14 @@ static void load_obj9_anim_fn(void){
 }
 
 // ============================================================================
-// obj9_pump: avanza la carga en segundo plano UN paso (un fichero) por llamada.
-// Se invoca 1 vez por frame desde background_to_buffer. Procesa los jobs en orden
-// (FIFO): el primer modelo encolado es el primero en estar listo. Al terminar un
-// job (exito o fallo) pasa al siguiente; cuando la cola se vacia, no hace nada.
+// obj9_pump: advances background loading ONE step (one file) per call.
+// Called once per frame from background_to_buffer. Processes jobs in order
+// (FIFO): first enqueued model is first to be ready. When a job completes
+// (success or failure) it moves to the next; when the queue is empty, does nothing.
 // ============================================================================
 static void obj9_pump(void){
     Obj9Job *j; Obj9Model *mdl;
-    if(obj9_job_head>=n_obj9_jobs){            // cola vacia: resetear contadores
+    if(obj9_job_head>=n_obj9_jobs){            // empty queue: reset counters
         if(n_obj9_jobs){n_obj9_jobs=0;obj9_job_head=0;}
         return;
     }
@@ -3000,56 +3012,56 @@ static void obj9_pump(void){
     if(j->kind==OBJ9_KIND_STATIC){
         if(j->step==0){
             if(!load_obj9_model(mdl,j->oname,j->sfac)){ mdl->ready=-1; obj9_job_head++; return; }
-            j->step=1;                          // textura el frame siguiente
+            j->step=1;                          // texture next frame
         } else {
             load_obj9_texture(mdl,j->tname);
-            mdl->ready=1; obj9_job_head++;       // modelo completo
+            mdl->ready=1; obj9_job_head++;       // model complete
         }
         return;
     }
 
-    // ---- Animacion (vertex morphing): 1 fotograma por frame ----
+    // ---- Animation (vertex morphing): 1 frame per call ----
     if(j->step==0){
         char fname[80];
-        build_frame_name(fname,j->oname,0);     // frame 0: topologia + posiciones
+        build_frame_name(fname,j->oname,0);     // frame 0: topology + positions
         if(!load_obj9_model(mdl,fname,j->sfac)){ mdl->ready=-1; obj9_job_head++; return; }
         j->nv=mdl->nv;
         if(j->nframes>1){
-            // Bloque contiguo de los nframes; copiar el frame 0 y apuntarlo.
+            // Contiguous block for nframes; copy frame 0 and point to it.
             j->block=(V3*)div_malloc((size_t)((long)j->nv*j->nframes*sizeof(V3)));
             if(j->block){
                 int f; for(f=0;f<j->nv;f++) j->block[f]=mdl->verts[f];
-                div_free(mdl->verts);            // libera la copia de 1 frame
+                div_free(mdl->verts);            // free the 1-frame copy
                 mdl->verts=j->block; mdl->vframes=j->block; mdl->nframes=j->nframes;
             } else {
-                j->nframes=1;                    // sin memoria: queda estatico (valido)
+                j->nframes=1;                    // out of memory: stays static (still valid)
             }
         }
         j->step=1;
         return;
     }
-    if(j->step < j->nframes){                    // frames 1..nframes-1: solo posiciones
+    if(j->step < j->nframes){                    // frames 1..nframes-1: positions only
         int f=j->step, got; char fname[80];
         build_frame_name(fname,j->oname,f);
         got=load_obj9_verts_only(fname,j->block+(long)f*j->nv,j->nv,j->sfac);
-        if(got!=j->nv){                          // frame ausente/topologia distinta:
-            int x; V3 *dst=j->block+(long)f*j->nv;//   duplicar el 0 (sin movimiento)
+        if(got!=j->nv){                          // missing frame / different topology:
+            int x; V3 *dst=j->block+(long)f*j->nv;//   duplicate frame 0 (no motion)
             for(x=0;x<j->nv;x++) dst[x]=j->block[x];
         }
         j->step++;
         return;
     }
-    // Ultimo paso: textura y listo.
+    // Final step: texture and done.
     load_obj9_texture(mdl,j->tname);
     mdl->ready=1; obj9_job_head++;
 }
 
 // ============================================================================
-// DRAW_OBJ9(handle, x, y, z, angle): encola una instancia del modelo 'handle'
-// (devuelto por LOAD_OBJ9) en la posicion de mundo (x,y,z) uds DIV2 con la
-// orientacion indicada (milesimas de grado, convencion DIV2). Llamar CADA FRAME
-// antes de FRAME (igual que DRAW_OBJ en KD3DT). La cola se vacia automaticamente
-// despues de que todas las vistas se rendericen.
+// DRAW_OBJ9(handle, x, y, z, angle): queues an instance of model 'handle'
+// (returned by LOAD_OBJ9) at world position (x,y,z) DIV2 units with
+// the given orientation (thousandths of degree, DIV2 convention). Call EVERY FRAME
+// before FRAME (same as DRAW_OBJ in KD3DT). Queue is flushed automatically
+// after all views have been rendered.
 // ============================================================================
 static void draw_obj9_fn(void){
     int angle =getparm();
@@ -3059,27 +3071,27 @@ static void draw_obj9_fn(void){
     int handle=getparm();
     Obj9Inst *inst; float ar; int ai;
     if(handle<1||handle>n_obj9_models||n_obj9_queue>=MAX_OBJ9_INST){retval(0);return;}
-    if(obj9_models[handle-1].ready!=1){retval(0);return;}   // aun cargando: no dibujar
+    if(obj9_models[handle-1].ready!=1){retval(0);return;}   // still loading: skip draw
     inst=&obj9_queue[n_obj9_queue];
     inst->midx=handle-1;
     inst->ix=(float)px/m9_unitscale;   // DIV2.x -> OBJ.x
     inst->iz=(float)py/m9_unitscale;   // DIV2.y -> OBJ.z
-    inst->iy=(float)pz/m9_unitscale;   // DIV2.z -> OBJ.y (altura)
+    inst->iy=(float)pz/m9_unitscale;   // DIV2.z -> OBJ.y (height)
     ar=(float)angle*(6.2831853f/360000.0f);
     ai=(int)(ar*TRIG_K)&TRIG_MASK;
     inst->ysin=sin_tab[ai];inst->ycos=cos_tab[ai];
-    inst->fa=0;inst->fb=0;inst->fblend=0.0f;   // sin animacion (frame 0)
+    inst->fa=0;inst->fb=0;inst->fblend=0.0f;   // no animation (frame 0)
     n_obj9_queue++;
     retval(0);
 }
 
 // ============================================================================
-// DRAW_OBJ9_ANIM(handle, x, y, z, angle, fpos): como DRAW_OBJ9 pero para modelos
-// cargados con LOAD_OBJ9_ANIM. 'fpos' es la posicion de la animacion en 1/256 de
-// fotograma: parte entera (fpos>>8) = fotograma, parte baja (fpos&255) = mezcla
-// hacia el siguiente. El recorrido es 0..nframes*256 y hace bucle automatico, de
-// modo que se interpola suavemente entre keyframes con muy pocos OBJ.
-// Ejemplo (10 frames, bucle de 3 s usando timer): ver MODE9.PRG.
+// DRAW_OBJ9_ANIM(handle, x, y, z, angle, fpos): like DRAW_OBJ9 but for models
+// loaded with LOAD_OBJ9_ANIM. 'fpos' is the animation position in 1/256 of
+// frame: integer part (fpos>>8) = frame, low part (fpos&255) = blend
+// toward the next. Range is 0..nframes*256 and loops automatically,
+// smoothly interpolating between keyframes with very few OBJ files.
+// Example (10 frames, 3s loop using timer): see MODE9.PRG.
 // ============================================================================
 static void draw_obj9_anim_fn(void){
     int fpos  =getparm();
@@ -3090,7 +3102,7 @@ static void draw_obj9_anim_fn(void){
     int handle=getparm();
     Obj9Inst *inst; Obj9Model *mdl; float ar; int ai,nf,fi;
     if(handle<1||handle>n_obj9_models||n_obj9_queue>=MAX_OBJ9_INST){retval(0);return;}
-    if(obj9_models[handle-1].ready!=1){retval(0);return;}   // aun cargando: no dibujar
+    if(obj9_models[handle-1].ready!=1){retval(0);return;}   // still loading: skip draw
     mdl=&obj9_models[handle-1];
     nf=mdl->nframes; if(nf<1) nf=1;
     inst=&obj9_queue[n_obj9_queue];
@@ -3101,24 +3113,24 @@ static void draw_obj9_anim_fn(void){
     ar=(float)angle*(6.2831853f/360000.0f);
     ai=(int)(ar*TRIG_K)&TRIG_MASK;
     inst->ysin=sin_tab[ai];inst->ycos=cos_tab[ai];
-    // Descomponer fpos (1/256 de frame) en frame base + mezcla, con bucle.
+    // Decompose fpos (1/256 of frame) into base frame + blend, with loop.
     if(fpos<0) fpos=0;
     fi=(fpos>>8)%nf;
     inst->fa=fi;
-    inst->fb=(fi+1)%nf;                 // bucle: tras el ultimo vuelve al 0
+    inst->fb=(fi+1)%nf;                 // loop: after last frame wraps back to 0
     inst->fblend=(float)(fpos&255)*(1.0f/255.0f);
     n_obj9_queue++;
     retval(0);
 }
 
 // ============================================================================
-// MODE9_OBJ9_READY(handle): estado de carga de un modelo de LOAD_OBJ9/_ANIM.
-//   1 = cargado y listo para DRAW_OBJ9.
-//   0 = todavia cargandose en segundo plano (sigue llamando hasta que sea 1).
-//  -1 = handle invalido o la carga fallo (fichero ausente, etc.).
-// Util para mostrar una barra de "Cargando..." o esperar a que todo este listo
-// antes de empezar la partida. No es obligatorio: DRAW_OBJ9 ya ignora por su
-// cuenta los modelos que aun no estan listos (el objeto aparece al terminar).
+// MODE9_OBJ9_READY(handle): loading state of a LOAD_OBJ9/_ANIM model.
+//   1 = loaded and ready for DRAW_OBJ9.
+//   0 = still loading in the background (keep calling until it returns 1).
+//  -1 = invalid handle or load failed (missing file, etc.).
+// Useful for showing a "Loading..." bar or waiting until everything is ready
+// before the game starts. Not required: DRAW_OBJ9 already ignores
+// models not yet ready on its own (the object appears when done).
 // ============================================================================
 static void mode9_obj9_ready_fn(void){
     int handle=getparm();
@@ -3173,9 +3185,9 @@ void __export divmain(COMMON_PARAMS){
     AutoLoad();
     GLOBAL_IMPORT();
 
-    // Construir tablas trigonometricas (una sola vez al cargar la DLL).
-    // 4096 entradas = resolucion de 0.088 grados, mucho mas fina que la
-    // granularidad del angulo DIV2 (1 milesima de grado = 0.001 grados).
+    // Build trigonometric tables (once, on DLL load).
+    // 4096 entries = 0.088-degree resolution, much finer than
+    // DIV2's angle granularity (1 thousandth of a degree = 0.001 degrees).
     {int i; for(i=0;i<TRIG_SIZE;i++){
         float a=(float)i*(6.2831853f/(float)TRIG_SIZE);
         sin_tab[i]=(float)sin(a); cos_tab[i]=(float)cos(a);
@@ -3183,15 +3195,15 @@ void __export divmain(COMMON_PARAMS){
 
     m9_active=0;m9_camera=0;m9_height=0;m9_pitch=0;m9_unitscale=100.0f;
     m9_bind=0;m9_region=0;m9_occlude=1;m9_ctype=200;far_clip=0.0f;cull_mode=1;
-    m9_collision=1;n_walls=0;m9_downscale=1;m9_texseg=TEX_SEG;   // colisiones ON por defecto
+    m9_collision=1;n_walls=0;m9_downscale=1;m9_texseg=TEX_SEG;   // collisions ON by default
     m9_focal_k=FOCAL_K;fog_scale=0.0f;
     m9_step=0.0f;n_floors=0;
     grid_n=0;frame_stamp=0;
     grid_items=NULL;grid_cap=0;tstamp=NULL;tstamp_cap=0;
     wgrid_items=NULL;wgrid_cap=0;wgrid_n=0;wstamp_frame=0;n_wcand=0;
-    for(i=0;i<MAX_VERTS;i++) vstamp[i]=0;   // sin sellos rancios entre ejecuciones
+    for(i=0;i<MAX_VERTS;i++) vstamp[i]=0;   // no stale stamps across runs
     for(i=0;i<MAX_VIEWS;i++){views[i].active=0;views[i].haslast=0;views[i].region=-1;}
-    for(i=0;i<MAX_REGIONS;i++) reg_def[i]=0;   // sin regiones definidas
+    for(i=0;i<MAX_REGIONS;i++) reg_def[i]=0;   // no regions defined
     n_m9spr=0;n_fpgspr=0;
     {int m; for(m=0;m<MAX_MATS;m++){mat_data[m]=NULL;mat_w[m]=mat_h[m]=0;mat_mip[m]=NULL;matm_w[m]=matm_h[m]=0;}}
     n_mats=1;
@@ -3204,7 +3216,7 @@ void __export divmain(COMMON_PARAMS){
         obj9_models[m].ready=0;
     }}
     n_obj9_models=0;n_obj9_queue=0;
-    n_obj9_jobs=0;obj9_job_head=0;   // sin cargas en segundo plano pendientes
+    n_obj9_jobs=0;obj9_job_head=0;   // no pending background loads
     sky_data=NULL;sky_w=0;sky_h=0;sky_on=0;sky_cd_vw=0;sky_cd_w=0;
     fog_map=NULL;fog_on=0;
     env_r=env_g=env_b=0;
@@ -3213,11 +3225,11 @@ void __export divmain(COMMON_PARAMS){
     DIV_export("background_to_buffer",background_to_buffer);
     DIV_export("post_process_buffer", post_process_buffer);
 
-    // Guardar paleta reservada (rampa flat + entrada de fondo)
+    // Save reserved palette (flat ramp + background entry)
     for(i=0;i<PAL_SHADES*3;i++) orig_pal[i]=palette[PAL_BASE*3+i];
     for(i=0;i<3;i++) orig_pal[PAL_SHADES*3+i]=palette[PAL_ENV*3+i];
 
-    // Rampa flat por defecto: gris
+    // Default flat ramp: grey
     {int j;
      for(j=0;j<PAL_SHADES;j++){
          float t=AMBIENT+(1.0f-AMBIENT)*(float)j/(float)(PAL_SHADES-1);
@@ -3225,7 +3237,7 @@ void __export divmain(COMMON_PARAMS){
          palette[(PAL_BASE+j)*3+1]=(char)((int)(50.0f*t+0.5f));
          palette[(PAL_BASE+j)*3+2]=(char)((int)(50.0f*t+0.5f));
      }}
-    // Fondo por defecto: negro
+    // Default background: black
     palette[PAL_ENV*3+0]=0;palette[PAL_ENV*3+1]=0;palette[PAL_ENV*3+2]=0;
     set_palette=1;
 
@@ -3241,7 +3253,7 @@ void __export divend(COMMON_PARAMS){
         if(mat_mip[m]){div_free(mat_mip[m]);mat_mip[m]=NULL;matm_w[m]=matm_h[m]=0;}
     }}
     {int m; for(m=0;m<n_obj9_models;m++){
-        // verts == vframes (mismo bloque); liberar una vez y anular ambos.
+        // verts == vframes (same block); free once and null both.
         if(obj9_models[m].verts){div_free(obj9_models[m].verts);obj9_models[m].verts=NULL;}
         obj9_models[m].vframes=NULL;obj9_models[m].nframes=1;
         if(obj9_models[m].uvs)  {div_free(obj9_models[m].uvs);  obj9_models[m].uvs=NULL;}
@@ -3249,8 +3261,8 @@ void __export divend(COMMON_PARAMS){
         if(obj9_models[m].tex)  {div_free(obj9_models[m].tex);  obj9_models[m].tex=NULL;}
         if(obj9_models[m].mip)  {div_free(obj9_models[m].mip);  obj9_models[m].mip=NULL;}
     }}
-    // Los jobs en vuelo no tienen memoria propia: su 'block' es el mismo puntero
-    // que obj9_models[].verts (ya liberado arriba). Solo resetear contadores.
+    // In-flight jobs have no memory of their own: their 'block' is the same pointer
+    // as obj9_models[].verts (already freed above). Just reset counters.
     n_obj9_models=0;n_obj9_queue=0;
     n_obj9_jobs=0;obj9_job_head=0;
     if(sky_data){div_free(sky_data);sky_data=NULL;sky_w=sky_h=0;sky_on=0;}

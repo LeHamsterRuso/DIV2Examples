@@ -54,7 +54,7 @@ BEGIN
     //KD3DT_UVSWAP(0); KD3DT_UVMODE(1, 1);   // flip U+V
     //KD3DT_UVSWAP(1); KD3DT_UVMODE(0, 0);   // swap UV (giro 90)
     //KD3DT_UVSWAP(1); KD3DT_UVMODE(1, 0);   // swap + flip U
-    KD3DT_LOAD("CAT.OBJ");
+    KD3DT_LOAD("OBJ/CAT.OBJ");
     KD3DT_SETTEX("MAP/CAT.MAP");
 
     // Controles en la parte inferior (no solapan con el debug de la DLL)

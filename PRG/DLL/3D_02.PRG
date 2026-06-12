@@ -16,7 +16,7 @@ BEGIN
     set_fps(30, 0);
 
     KD3D_SETCOLOR(20, 40, 60);
-    KD3D_LOAD("CAT.OBJ");
+    KD3D_LOAD("OBJ/CAT.OBJ");
 
     rx = 0; ry = 0; rz = 0;
 

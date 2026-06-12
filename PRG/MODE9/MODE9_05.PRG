@@ -3,27 +3,27 @@
 // AUTHOR:      Sebastian J. MONCHO MAQUET
 // DATE:        11/06/2026
 // DESCRIPTION: Ejemplo del "modo 9" que INTERCAMBIA MAPAS en caliente. Parte del
-//              MODE9_04.PRG (patio del castillo con cámara primera persona):
-//                - Al acercarse a la PUERTA DEL TORREÓN se ENTRA al castillo:
+//              MODE9_04.PRG (patio del castillo con camara primera persona):
+//                - Al acercarse a la PUERTA DEL TORREON se ENTRA al castillo:
 //                  se descarga el exterior (CASTLE.OBJ) y se carga el INTERIOR
 //                  (CASTIN.OBJ), una sala cerrada con su propia textura.
 //                - El NPC que en el MODE9_04 estaba en el patio AHORA esta DENTRO
 //                  de la sala (se "muda" de mapa).
 //                - Dentro, una PUERTA DE SALIDA devuelve al patio.
 //
-//              Objetivo: ver cómo se comporta el modo 9 al CAMBIAR de escenario
+//              Objetivo: ver como se comporta el modo 9 al CAMBIAR de escenario
 //              .OBJ y cargar/descargar assets (malla, texturas, cielo, sprites).
 //
-//              IMPORTANTE (por qué TODO va inline en el proceso camara): en DIV2,
+//              IMPORTANTE (por que TODO va inline en el proceso camara): en DIV2,
 //              llamar a una FUNCTION/PROCESS referenciada antes de definirse NO
-//              ejecuta su cuerpo de forma síncrona como cabría esperar; por eso el
-//              cambio de mapa (signal + LOAD_WLD9 + recolocar la cámara) se hace
-//              LITERALMENTE dentro del bucle, sin llamar a ninguna función. Así
+//              ejecuta su cuerpo de forma sincrona como cabria esperar; por eso el
+//              cambio de mapa (signal + LOAD_WLD9 + recolocar la camara) se hace
+//              LITERALMENTE dentro del bucle, sin llamar a ninguna funcion. Asi
 //              LOAD_WLD9 se ejecuta de verdad y el mapa se recarga.
 //
 //              - RECARGA EN CALIENTE sin parar el modo 9: LOAD_WLD9 no toca el
-//                estado del modo 9 (sigue ACTIVO) ni el enlace de la cámara
-//                (mismo id + dirección &m9.z), solo cambia la malla/materiales y
+//                estado del modo 9 (sigue ACTIVO) ni el enlace de la camara
+//                (mismo id + direccion &m9.z), solo cambia la malla/materiales y
 //                reconstruye colisiones. NO se llama a STOP_MODE9/START_MODE9.
 //              - Tras cada cambio hay un COOLDOWN que impide re-disparar la puerta
 //                hasta soltarla (evita rebotes mapa-a-mapa).
@@ -38,8 +38,8 @@
 //   CASTLE.OBJ / CASTIN.OBJ        escenarios 3D (exterior / interior)
 //   MAP/CASTLE.MAP STAIRS.MAP WATER.MAP   texturas del exterior (mats 0,1,2)
 //   MAP/CASTIN_T.MAP                    textura del interior (mat 0; de CASTIN_T.png)
-//   MAP/SKY.MAP                       cielo (sólo exterior)
-//   FPG/MODE9.FPG                     billboards (NPC, árbol, cartel)
+//   MAP/SKY.MAP                       cielo (solo exterior)
+//   FPG/MODE9.FPG                     billboards (NPC, arbol, cartel)
 //------------------------------------------------------------------------------
 PROGRAM MODE9_05_DEMO;
 
@@ -56,17 +56,17 @@ CONST
     MAP_IN   = 1;          // interior (sala)
     SWAP_CD  = 40;         // frames de cooldown tras un cambio de mapa
 
-    // Puerta del torreón (exterior): OBJ z=-4 -> mundo y=-400.
+    // Puerta del torreon (exterior): OBJ z=-4 -> mundo y=-400.
     DOOR_X = 0;   DOOR_Y = -400;   DOOR_R2 = 20000;   // radio de disparo ~141
     // Puerta de salida (interior): OBJ z=-6 -> mundo y=-600.
     EXIT_X = 0;   EXIT_Y = -600;   EXIT_R2 = 22500;   // radio de disparo ~150
-    // NPC dentro de la sala (mismo sitio que NPC(0,500,50)): globo de diálogo al acercarse.
+    // NPC dentro de la sala (mismo sitio que NPC(0,500,50)): globo de dialogo al acercarse.
     NPC_X = 0;    NPC_Y = 500;     BUBBLE_R2 = 160000;   // radio del globo ~400
     NPC_HEAD = 220;       // punto (mundo) a la altura de la CABEZA: ancla del bocadillo y destino del rabito
-    NPC_TOP  = 320;       // punto (mundo) SOBRE la cabeza: ahí va el nombre
-    BUB_HW = 78;          // semiancho del bocadillo lateral (1 línea de frase)
+    NPC_TOP  = 320;       // punto (mundo) SOBRE la cabeza: ahi va el nombre
+    BUB_HW = 78;          // semiancho del bocadillo lateral (1 linea de frase)
     BUB_HH = 12;          // semialto del bocadillo
-    BUB_GAP = 12;         // separación entre el NPC y el bocadillo
+    BUB_GAP = 12;         // separacion entre el NPC y el bocadillo
 
 GLOBAL
     STRUCT m9            // STRUCT de camara del modo 9 (mismos campos que m8). &m9.z = base del struct.
@@ -77,7 +77,8 @@ GLOBAL
     END
     scr_x;                // resolucion real (la lee la DLL): raton/camara a
     scr_y;                // cualquier resolucion, no solo 320x200
-    map_state;            // MAP_OUT / MAP_IN (se muestra como 1 dígito arriba-izda)
+    map_state;            // MAP_OUT / MAP_IN (se muestra como 1 digito arriba-izda)
+
 BEGIN
     // Es probable que los assets tarden en cargar en hardware real.
     // Si te salta la expcion 142, puedes decomentar esta linea para ignorarla.
@@ -89,16 +90,13 @@ BEGIN
     scr_x = MODE9_SCRW();   // MODE9_SCRW() y MODE9_SCRH() se pueden llamar en cualquier momento, no solo al inicio, por si quieres cambiar la resolucion con set_mode durante el juego.
     scr_y = MODE9_SCRH();
 
-    load_fpg("FPG/MODE9.FPG");
+    LOAD_FPG("FPG/MODE9.FPG");
     MODE9_LOADFPG("FPG/MODE9.FPG");
 
     MODE9_STEP(70);
 
     map_state = MAP_OUT;
-    camara();
-
-    write(0, scr_x/2, scr_y-9, 4, "WASD+RATON  ESPACIO salto  ESC salir");
-    write_int(0, 2, 2, 0, OFFSET fps); 
+    camara();           // muestra la pantalla de inicio, carga el 3D y juega
 END
 
 
@@ -114,23 +112,63 @@ PRIVATE
     z_fell;        // z tras aplicar la gravedad, ANTES de que la DLL ajuste
     cooldown;          // frames restantes sin poder disparar puertas
     dx; dy; d2;
-    bub_on;            // 1 = globo de diálogo del NPC visible
+    bub_on;            // 1 = globo de dialogo del NPC visible
     bub_fill; bub_brd; bub_tail;   // bocadillo: elipse rellena, borde, rabito
     bub_spk;           // texto de la frase (dentro del bocadillo)
     name_plate; name_txt;          // placa + nombre, encima del NPC
-    bd2;               // distancia (al cuadrado) de la cámara al NPC
+    bd2;               // distancia (al cuadrado) de la camara al NPC
     show;              // 1 = se cumplen las condiciones para ver el globo
-    nsx; nsy; nsz;     // proyección de la CABEZA del NPC (MODE9_PROJECT)
-    tsx; tsy;          // proyección del punto SOBRE la cabeza (nombre)
+    nsx; nsy; nsz;     // proyeccion de la CABEZA del NPC (MODE9_PROJECT)
+    tsx; tsy;          // proyeccion del punto SOBRE la cabeza (nombre)
     cx; cy; tx;        // centro del bocadillo y x del rabito en su borde
+    pk;                // id del texto "Pulsa una tecla" (parpadeo)
+    i; detected;       // sondeo de teclas en la pantalla de inicio
+    sel; ed_cur;       // dialogo de salida: opcion elegida (1=Si,0=No) y cursor
 BEGIN
+
+    // =================== PANTALLA DE INICIO (pulsa una tecla) ===============
+    // Aun no se ha cargado el mundo 3D: es una pantalla 2D normal.
+    draw(3,  0, 3, 0,  18, 36, scr_x-18, scr_y-36);         // fondo oscuro
+    draw(2, 15, 15, 0, 18, 36, scr_x-18, scr_y-36);         // marco
+    write(0, scr_x/2, 56, 4, "EL CASTILLO 3D");
+    write(0, scr_x/2, 74, 4, "( Modo 9 - DIV2 )");
+    pk = 0;
+    detected = 0;
+
+    // Fondo del titulo (graph 14 = TITLEM9.PCX, 320x200).
+    put_screen(0, 14);
+    frame;
+    // Esperar a que se pulse cualquier tecla. Se sondea key() de todos los
+    // scancodes (estado real "pulsada"), porque scan_code aqui es un pulso de
+    // 1 frame y se pierde si el sondeo no cae justo en ese frame.
+    repeat
+        if ((timer[0]/40) % 2 == 0)
+            if (pk == 0)
+                pk = write(0, scr_x/2, 138, 4, "Pulsa una tecla");
+            end
+        else
+            if (pk <> 0)
+                delete_text(pk);
+                pk = 0;
+            end
+        end
+        FRAME;
+    until(scan_code == 0);
+    // Esperar a soltar todas las teclas antes de empezar.
+    repeat
+        FRAME;
+    until (scan_code != 0);
+    delete_text(all_text);
+    delete_draw(all_drawing);
+    clear_screen();
+    FRAME;
     // ---------------- CARGA INICIAL: EXTERIOR ----------------
-    LOAD_WLD9("CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
+    LOAD_WLD9("OBJ/CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
     MODE9_MATERIAL(1, "MAP/STAIRS.MAP");
     MODE9_MATERIAL(2, "MAP/WATER.MAP");
     LOAD_SKY9("MAP/SKY.MAP");
 
-    M9TREE(600, -1300, 0);          // props del patio (el NPC vive DENTRO, no aquí)
+    M9TREE(600, -1300, 0);          // props del patio (el NPC vive DENTRO, no aqui)
     M9TREE(-600, -1300, 0);
     M9TREE(1000, -1600, 0);
     M9TREE(-1000, -1600, 0);
@@ -159,7 +197,7 @@ BEGIN
     //   region = 0 (pantalla completa; unica region soportada por la DLL).
     START_MODE9(id, &m9.z, 0);
 
-    //MODE9_DOWNSCALE(2) reduce la resolución del render del modo 9.
+    //MODE9_DOWNSCALE(2) reduce la resolucion del render del modo 9.
     // Es un truco empleado en juegos first person shooter de consolas de 16 bits
     // Cada valor de downscale reduce la resolucion a 1/2, 1/3 o 1/4 (y duplica lineas para llenar la pantalla).
     // 1 = resolucion completa (sin downscale, valor por defecto);
@@ -174,9 +212,45 @@ BEGIN
     grounded = 1;
     bub_on   = 0;
 
-    load_pal("div2.pal");
+    // HUD del juego (se crea aqui, ya pasada la pantalla de inicio).
+    write(0, scr_x/2, scr_y-9, 4, "WASD+RATON  ESPACIO salto  ESC salir");
+    write_int(0, 2, 2, 0, OFFSET fps);
+
     LOOP
-        if (key(_esc)) STOP_MODE9(); exit("Bye", 0); end
+        // --- ESC: dialogo 2D de confirmacion "Deseas salir? Si/No" ---------
+        if (key(_esc))
+            STOP_MODE9();                       // pausa el render 3D
+            put_screen(0, 15);
+
+            while (key(_esc)) FRAME; end        // soltar ESC
+            delete_text(all_text);              // limpiar HUD/bocadillo
+            delete_draw(all_drawing);
+            bub_on = 0;
+            sel = 0;                            // 0 = No (por defecto), 1 = Si
+            draw(3,  0,  3, 0, 40, 68, scr_x-40, 132);             // fondo oscuro
+            draw(2, 15, 15, 0, 40, 68, scr_x-40, 132);             // marco del panel
+            write(0, scr_x/2, 84, 4, "Deseas salir?");
+            write(0, scr_x/2-34, 112, 4, "Si");
+            write(0, scr_x/2+34, 112, 4, "No");
+            ed_cur = draw(2, 14, 15, 0, scr_x/2+18, 104, scr_x/2+50, 122);  // cursor en "No"
+            repeat
+                if (key(_left))  sel = 1; end
+                if (key(_right)) sel = 0; end
+                if (sel == 1) move_draw(ed_cur, 14, 15, scr_x/2-50, 104, scr_x/2-18, 122);
+                else          move_draw(ed_cur, 14, 15, scr_x/2+18, 104, scr_x/2+50, 122); end
+                FRAME;
+            until (key(_enter))
+            if (sel == 1) STOP_MODE9(); exit("Bye", 0); end
+            // "No": limpiar dialogo, recrear HUD y reanudar el juego 3D.
+            delete_text(all_text);
+            delete_draw(all_drawing);
+            clear_screen();
+            write(0, scr_x/2, scr_y-9, 4, "WASD+RATON  ESPACIO salto  ESC salir");
+            write_int(0, 2, 2, 0, OFFSET fps);
+            START_MODE9(id, &m9.z, 0);
+            while (key(_enter)) FRAME; end       // soltar intro
+            mouse_x_prev = mouse.x;       // evitar tiron de camara al reanudar
+        end
 
         // --- Movimiento lateral (strafe) ---
         if (key(_d)) xadvance(angle - 90000, ADV_UNIT); end
@@ -226,7 +300,7 @@ BEGIN
             cooldown = cooldown - 1;
         else
             if (map_state == MAP_OUT)
-                // ¿Pegados a la puerta del torreón? -> ENTRAR
+                // Pegados a la puerta del torreon? -> ENTRAR
                 dx = x - DOOR_X;  dy = y - DOOR_Y;  d2 = dx*dx + dy*dy;
                 if (d2 < DOOR_R2)
                     fade_off();
@@ -235,12 +309,19 @@ BEGIN
                     frame;
                     signal(type M9TREE, s_kill);     // descargar props del patio
                     signal(type M9SIGN, s_kill);
-                    // Recarga en caliente: el modo 9 sigue ACTIVO y la cámara
+                    // Recarga en caliente: el modo 9 sigue ACTIVO y la camara
                     // enlazada (id + &m9.z) persiste; LOAD_WLD9 solo cambia la malla.
-                    LOAD_WLD9("CASTIN.OBJ", "MAP/CASTIN_T.MAP", 100);  // 1 material (0)
+                    LOAD_WLD9("OBJ/CASTIN.OBJ", "MAP/CASTIN_T.MAP", 100);  // 1 material (0)
                     SKY9_OFF();
                     SET_ENV_COLOR9(8, 8, 12);
-                    NPC(0, 500, 50);                 // el NPC, ahora dentro
+                    NPC(0, 500, 50);                 // el NPC, ahora dentro (sobre el estrado)
+                    THRONE(0, 575, 50);              // trono detras del NPC, en el estrado
+                    LAMP(0, 300,  500);                 // lampara colgando del techo
+                    LAMP(0, -150, 500);                 // lampara colgando del techo
+                    TORCH( 470,  300, 250);          // 4 antorchas en las paredes
+                    TORCH( 470, -100, 250);
+                    TORCH(-470,  300, 250);
+                    TORCH(-470, -100, 250);
                     x = 0;  y = -300;  z = 0;  angle = -90000;
                     m9.height = eye_base;  m9.angle = 0;
                     fall_v = 0;  grounded = 1;
@@ -248,15 +329,18 @@ BEGIN
                     cooldown  = SWAP_CD;
                 end
             else
-                // ¿Pegados a la puerta de salida? -> SALIR
+                // Pegados a la puerta de salida? -> SALIR
                 dx = x - EXIT_X;  dy = y - EXIT_Y;  d2 = dx*dx + dy*dy;
                 if (d2 < EXIT_R2)
                     fade_off();
                     frame;
                     fade_on();
                     frame;
-                    signal(type NPC, s_kill);        // descargar el NPC de la sala
-                    LOAD_WLD9("CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
+                    signal(type NPC, s_kill);        // descargar NPC y props de la sala
+                    signal(type THRONE, s_kill);
+                    signal(type LAMP, s_kill);
+                    signal(type TORCH, s_kill);
+                    LOAD_WLD9("OBJ/CASTLE.OBJ", "MAP/CASTLE.MAP", 100);
                     MODE9_MATERIAL(1, "MAP/STAIRS.MAP");
                     MODE9_MATERIAL(2, "MAP/WATER.MAP");
                     LOAD_SKY9("MAP/SKY.MAP");
@@ -274,13 +358,13 @@ BEGIN
             end
         end
 
-        // ===================== NOMBRE + BOCADILLO (estilo cómic) ============
-        // Se muestra SÓLO si: estamos en la sala, CERCA del NPC y MIRÁNDOLO
-        // (MODE9_PROJECT devuelve 1 = delante de la cámara, y su x cae en pantalla).
+        // ===================== NOMBRE + BOCADILLO (estilo comic) ============
+        // Se muestra SOLO si: estamos en la sala, CERCA del NPC y MIRANDOLO
+        // (MODE9_PROJECT devuelve 1 = delante de la camara, y su x cae en pantalla).
         //   - El NOMBRE ("Nazuma") va ENCIMA del NPC (sobre su cabeza), sin tapar
         //     la cara, con una placa semitransparente para leerse.
         //   - El BOCADILLO con la frase va a un LADO del NPC; elige IZDA o DCHA
-        //     según dónde haya más sitio (si el NPC está en la mitad izquierda de
+        //     segun donde haya mas sitio (si el NPC esta en la mitad izquierda de
         //     la pantalla, el bocadillo va a la derecha, y viceversa). El RABITO
         //     sale del lado del bocadillo que mira al NPC.
         // Ambos SIGUEN al NPC (se reposicionan con move_draw/move_text cada frame).
@@ -289,7 +373,7 @@ BEGIN
             bd2 = (x - NPC_X)*(x - NPC_X) + (y - NPC_Y)*(y - NPC_Y);
             if (bd2 < BUBBLE_R2)
                 if (MODE9_PROJECT(NPC_X, NPC_Y, NPC_HEAD, OFFSET nsx, OFFSET nsy, OFFSET nsz))
-                    if (nsx >= 0 and nsx < scr_x)   // el NPC está en pantalla -> lo miramos
+                    if (nsx >= 0 and nsx < scr_x)   // el NPC esta en pantalla -> lo miramos
                         show = 1;
                     end
                 end
@@ -303,7 +387,7 @@ BEGIN
             end
             if (tsy < 8) tsy = 8; end       // que el nombre no se salga por arriba
 
-            // Lado del bocadillo según el espacio disponible en pantalla.
+            // Lado del bocadillo segun el espacio disponible en pantalla.
             if (nsx < scr_x/2) cx = nsx + BUB_GAP + BUB_HW;   // NPC a la izda -> bocadillo a la DCHA
             else               cx = nsx - BUB_GAP - BUB_HW;   // NPC a la dcha -> bocadillo a la IZDA
             end
@@ -312,7 +396,7 @@ BEGIN
             cy = nsy;                                            // a la altura de la cabeza
             if (cy < BUB_HH + 2)            cy = BUB_HH + 2;            end
             if (cy > scr_y - BUB_HH - 12)   cy = scr_y - BUB_HH - 12;   end
-            // Borde del bocadillo que mira al NPC (de ahí sale el rabito).
+            // Borde del bocadillo que mira al NPC (de ahi sale el rabito).
             if (cx > nsx) tx = cx - BUB_HW;   else tx = cx + BUB_HW;   end
 
             if (bub_on == 0)
@@ -325,7 +409,7 @@ BEGIN
                 name_txt   = write(0, tsx, tsy, 4, "Nazuma");                                // nombre encima del NPC
                 bub_on     = 1;
             else
-                // ya existe: sólo reposicionar para seguir al NPC
+                // ya existe: solo reposicionar para seguir al NPC
                 move_draw(bub_fill, 0,  7, cx-BUB_HW, cy-BUB_HH, cx+BUB_HW, cy+BUB_HH);
                 move_draw(bub_brd, 15, 15, cx-BUB_HW, cy-BUB_HH, cx+BUB_HW, cy+BUB_HH);
                 move_draw(bub_tail,15, 15, tx, cy, nsx, nsy);
@@ -394,6 +478,47 @@ BEGIN
     ctype = c_m9;
     graph = 10;
     size  = 100;
+    angle = 0;
+    x = wx; y = wy; z = wz;
+    LOOP
+        FRAME;
+    END
+END
+
+//------------------------------------------------------------------------------
+// Billboards del INTERIOR (graficos id >= 11 en FPG/MODE9.FPG):
+//   11 = antorcha,  12 = lampara de techo,  13 = trono.
+// Se crean al entrar a la sala y se destruyen con signal(type ...) al salir.
+//------------------------------------------------------------------------------
+PROCESS TORCH(wx, wy, wz)
+BEGIN
+    ctype = c_m9;
+    graph = 11;
+    size  = 200;
+    angle = 0;
+    x = wx; y = wy; z = wz;
+    LOOP
+        FRAME;
+    END
+END
+
+PROCESS LAMP(wx, wy, wz)
+BEGIN
+    ctype = c_m9;
+    graph = 12;
+    size  = 300;
+    angle = 0;
+    x = wx; y = wy; z = wz;
+    LOOP
+        FRAME;
+    END
+END
+
+PROCESS THRONE(wx, wy, wz)
+BEGIN
+    ctype = c_m9;
+    graph = 13;
+    size  = 400;
     angle = 0;
     x = wx; y = wy; z = wz;
     LOOP
