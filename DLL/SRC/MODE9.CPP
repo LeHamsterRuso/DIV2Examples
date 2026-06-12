@@ -208,11 +208,19 @@ static int    wall_vc[MAX_VERTS];    // num walls touching each XZ group (for ca
 static int    vgroup[MAX_VERTS];     // vertex -> representative of its XZ coincidence group
 
 // ---- Floors for steps and ramps (floor-following) -----------------------
-// Indices of the near-horizontal triangles (floor/ceiling). floor_height() finds
+// Indices of the near-horizontal UPWARD-facing triangles (floors only, no
+// ceilings/roofs: see load classifier). floor_height() finds
 // the HIGHEST floor under the player (<= feet + m9_step) and raises the feet onto it:
 // this climbs sloped ramps and steps without sinking into floors at a different level.
 static int    mesh_floor_idx[MAX_FLOORS];
 static int    n_floors=0;
+// ---- Ceilings for HEAD collision ----------------------------------------
+// Indices of the near-horizontal DOWNWARD-facing triangles (roofs/ceilings).
+// ceil_height() finds the LOWEST ceiling above the player; the collision then
+// caps the feet so the head (feet + PLAYER_BODY) can't go through it. This is
+// what stops you from jumping THROUGH a ceiling when collisions are on.
+static int    mesh_ceil_idx[MAX_FLOORS];
+static int    n_ceils=0;
 // Max auto-climbable step/ramp height (OBJ units). 0 = disabled
 // (classic behavior: the DLL doesn't touch z, the PRG controls the height).
 static float  m9_step=0.0f;
@@ -1004,7 +1012,7 @@ static int load_obj_file(char *fname){
     FILE *f;
     int vi[16],uvi[16],nv,i;
 
-    n_verts=0;n_uvs=0;n_tris=0;mesh_ok=0;has_uvs=0;n_mats=1;n_floors=0;
+    n_verts=0;n_uvs=0;n_tris=0;mesh_ok=0;has_uvs=0;n_mats=1;n_floors=0;n_ceils=0;
 
     f=div_fopen(fname,"r");
     if(!f){
@@ -1080,7 +1088,7 @@ static int load_obj_file(char *fname){
     // its XZ projection is a segment (the pair of farthest-apart vertices).
     // Its vertical extent [ymin,ymax] is also stored to not collide with
     // roofs or lintels above the player (e.g. the gate).
-    n_walls=0; n_floors=0;
+    n_walls=0; n_floors=0; n_ceils=0;
     for(i=0;i<n_tris;i++){
         int a=mesh_t[i].a,b=mesh_t[i].b,c=mesh_t[i].c;
         float ux=mesh_v[b].x-mesh_v[a].x, uy=mesh_v[b].y-mesh_v[a].y, uz=mesh_v[b].z-mesh_v[a].z;
@@ -1089,9 +1097,14 @@ static int load_obj_file(char *fname){
         float nl=(float)sqrt((double)(nx*nx+ny*ny+nz*nz));
         if(nl<1e-6f)continue;
         if((ny<0?-ny:ny)/nl >= WALL_NY){
-            // Nearly horizontal -> FLOOR/CEILING: floor candidate for steps and
-            // ramps (floor-follow). It's not a wall, doesn't go into mesh_walls.
-            if(n_floors<MAX_FLOORS) mesh_floor_idx[n_floors++]=i;
+            // Nearly horizontal -> FLOOR or CEILING, split by normal direction
+            // (Y-up). UPWARD faces (ny>0) are floors you stand on -> floor-follow.
+            // DOWNWARD faces (ny<0) are ceilings/roofs -> head collision: they
+            // cap how high you can jump so you can't pass THROUGH them. A ceiling
+            // must NOT be a floor (or jumping would snap your feet onto it and
+            // trap you on top). Neither is a wall, so they skip mesh_walls.
+            if(ny>0.0f){ if(n_floors<MAX_FLOORS) mesh_floor_idx[n_floors++]=i; }
+            else       { if(n_ceils <MAX_FLOORS) mesh_ceil_idx [n_ceils ++]=i; }
             continue;
         }
         if(n_walls>=MAX_WALLS) continue;            // wall (nearly vertical)
@@ -1586,6 +1599,37 @@ static int floor_height(float px,float pz,float ceil_y,float *fy){
         if(y<=ceil_y+0.05f && y>best){best=y;found=1;}
     }
     if(found)*fy=best;
+    return found;
+}
+
+// ============================================================================
+// ceil_height: height of the LOWEST ceiling/roof strictly above 'above_y' at
+// the point (px,pz), in OBJ units. Same XZ point-in-triangle test as
+// floor_height but over the DOWNWARD-facing triangles, keeping the SMALLEST y.
+// Used for HEAD collision: the caller caps the feet so feet+PLAYER_BODY stays
+// under this ceiling, so you can't jump through a roof when collisions are on.
+// Returns 1 and writes *cy if it finds a ceiling overhead; 0 otherwise.
+// ============================================================================
+static int ceil_height(float px,float pz,float above_y,float *cy){
+    int i,found=0; float best=1e30f;
+    for(i=0;i<n_ceils;i++){
+        int t=mesh_ceil_idx[i];
+        int a=mesh_t[t].a,b=mesh_t[t].b,c=mesh_t[t].c;
+        float x0=mesh_v[a].x,z0=mesh_v[a].z,y0=mesh_v[a].y;
+        float x1=mesh_v[b].x,z1=mesh_v[b].z,y1=mesh_v[b].y;
+        float x2=mesh_v[c].x,z2=mesh_v[c].z,y2=mesh_v[c].y;
+        float d=(z1-z2)*(x0-x2)+(x2-x1)*(z0-z2);
+        float l0,l1,l2,y,inv;
+        if(d<1e-6f&&d>-1e-6f)continue;
+        inv=1.0f/d;
+        l0=((z1-z2)*(px-x2)+(x2-x1)*(pz-z2))*inv;
+        l1=((z2-z0)*(px-x2)+(x0-x2)*(pz-z2))*inv;
+        l2=1.0f-l0-l1;
+        if(l0<-0.001f||l1<-0.001f||l2<-0.001f)continue;   // (px,pz) outside the triangle
+        y=l0*y0+l1*y1+l2*y2;
+        if(y>above_y && y<best){best=y;found=1;}          // lowest ceiling overhead
+    }
+    if(found)*cy=best;
     return found;
 }
 
@@ -2313,7 +2357,7 @@ static void render_view(M9View *v,char *vid,int W,int H){
 
     // --- Collision: push the camera out of the walls and rewrite its
     //     position in the process (so advance/xadvance "don't go through" walls) --
-    if(m9_collision && cbase>=0 && (n_walls>0 || (m9_step>0.0f && n_floors>0))){
+    if(m9_collision && cbase>=0 && (n_walls>0 || (m9_step>0.0f && n_floors>0) || n_ceils>0)){
         float r=(float)mem[cbase+P_RADIUS]/m9_unitscale;
         float feet=(float)mem[cbase+P_Z]/m9_unitscale;   // player feet (OBJ units)
         float eyeoff=Cy-feet;                             // eye above the feet
@@ -2325,14 +2369,30 @@ static void render_view(M9View *v,char *vid,int W,int H){
             collide_xz(&Cx,&Cz,Cy,r,feet,m9_step);
             v->lastx=Cx; v->lastz=Cz; v->haslast=1;
         }
-        // Steps and ramps (floor-follow): raise the feet to the floor below,
-        // as long as the height difference is <= m9_step. It does NOT lower the feet (that's done by
-        // the PRG's gravity). The eye (Cy) rises with the feet for this same frame.
-        if(m9_step>0.0f && n_floors>0){
-            float fy;
-            if(floor_height(Cx,Cz,feet+m9_step,&fy) && feet<fy) feet=fy;
-            Cy=feet+eyeoff;
-            {float fz=feet*m9_unitscale; mem[cbase+P_Z]=(int)(fz>=0?fz+0.5f:fz-0.5f);}
+        // Floor-follow + HEAD collision. Floor-follow raises the feet onto the
+        // floor below (steps/ramps, <= m9_step; it does NOT lower the feet, that's
+        // the PRG's gravity). Then the ceiling caps the feet so the head
+        // (feet+PLAYER_BODY) can't go through a roof: that's what stops you from
+        // jumping THROUGH the ceiling with collisions on. If either touched the
+        // feet, re-derive the eye (Cy) and rewrite z once.
+        {
+            int feetadj=0;
+            if(m9_step>0.0f && n_floors>0){
+                float fy;
+                if(floor_height(Cx,Cz,feet+m9_step,&fy) && feet<fy) feet=fy;
+                feetadj=1;
+            }
+            if(n_ceils>0){
+                float cyl;
+                if(ceil_height(Cx,Cz,feet+0.1f,&cyl)){
+                    float cap=cyl-PLAYER_BODY;        // highest feet keeping the head under
+                    if(feet>cap){ feet=cap; feetadj=1; }
+                }
+            }
+            if(feetadj){
+                Cy=feet+eyeoff;
+                {float fz=feet*m9_unitscale; mem[cbase+P_Z]=(int)(fz>=0?fz+0.5f:fz-0.5f);}
+            }
         }
         {float fx=Cx*m9_unitscale, fz=Cz*m9_unitscale;
          mem[cbase+P_X]=(int)(fx>=0?fx+0.5f:fx-0.5f);
@@ -3197,7 +3257,7 @@ void __export divmain(COMMON_PARAMS){
     m9_bind=0;m9_region=0;m9_occlude=1;m9_ctype=200;far_clip=0.0f;cull_mode=1;
     m9_collision=1;n_walls=0;m9_downscale=1;m9_texseg=TEX_SEG;   // collisions ON by default
     m9_focal_k=FOCAL_K;fog_scale=0.0f;
-    m9_step=0.0f;n_floors=0;
+    m9_step=0.0f;n_floors=0;n_ceils=0;
     grid_n=0;frame_stamp=0;
     grid_items=NULL;grid_cap=0;tstamp=NULL;tstamp_cap=0;
     wgrid_items=NULL;wgrid_cap=0;wgrid_n=0;wstamp_frame=0;n_wcand=0;
